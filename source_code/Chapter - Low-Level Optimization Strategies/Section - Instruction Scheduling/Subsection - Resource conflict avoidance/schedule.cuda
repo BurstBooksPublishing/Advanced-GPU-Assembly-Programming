@@ -1,0 +1,27 @@
+extern "C" __global__
+void schedule_test(const float *a, const float *b, float *out, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n) return;
+
+  // Load operands (early loads help hide memory latency).
+  float x = a[i];                      // LD/ST pipe
+  float y = b[i];                      // LD/ST pipe
+
+  // Naive sequence: dependent FMAs and clustered SFU-like calls (bad).
+  float t0 = fmaf(x, y, 1.0f);         // FMA (FP pipe)
+  float t1 = fmaf(t0, y, 1.0f);        // dependent -> serializes
+  // hypothetically heavy SFU-like chain (represented by many transcendentals)
+  // (in real code, use __sinf/__cosf; here shown as dependent math)
+  float s0 = sinf(t1);                 // SFU (special pipe)
+  float s1 = sinf(s0);                 // back-to-back SFU -> stalls
+
+  // Schedule-aware: interleave independent integer and FP work (better).
+  int idx = i + 123;                   // integer work (INT pipe)
+  float u0 = x + 2.0f;                 // independent FP
+  float u1 = (float)(idx & 0xff);      // simple integer-to-float conversion
+  float r0 = fmaf(u0, y, u1);          // FMA but independent of t1
+  float r1 = fmaf(r0, u0, 0.5f);       // more independent FP work
+
+  // Combine results; reduces long runs of same-pipe ops in any single warp.
+  out[i] = (r1 + s1) * 0.5f;
+}
