@@ -1,0 +1,15 @@
+__global__ void coalesce_demo(float *dst, const float *src, int N, int stride) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;           // global thread id
+  int lane = threadIdx.x & 31;                               // lane in warp
+  // Case A: contiguous (coalesced) load if stride==1
+  if (tid < N) {
+    float v = src[tid];                                      // ideal: one 128B tran per aligned warp
+    dst[tid] = v * 2.0f;                                     // simple compute
+  }
+  // Case B: strided load (bad if stride large)
+  int tid2 = blockIdx.x * blockDim.x + lane + (threadIdx.x/32)*stride; 
+  if (tid2 < N) {
+    float u = src[tid2];                                     // may touch many 128B segments
+    dst[tid2] += u;                                          // accumulate to show cost
+  }
+}
