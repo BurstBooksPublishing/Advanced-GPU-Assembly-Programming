@@ -1,0 +1,26 @@
+extern "C" __global__ void tileCopyPad(const float* __restrict__ src, float* __restrict__ dst,
+                                       int width, int height) {
+  const int tx = threadIdx.x;          // thread x in tile
+  const int ty = threadIdx.y;          // thread y in tile
+  const int bx = blockIdx.x * 32;      // block base x (tile width 32)
+  const int by = blockIdx.y * 32;      // block base y
+  const int gx = bx + tx;              // global x
+  const int gy = by + ty;              // global y
+
+  __shared__ float tile[32][33];       // padding +1 to break bank collisions
+
+  // Load: coalesced global load per row, store to shared with padded stride
+  if (gx < width && gy < height) {
+    tile[ty][tx] = src[gy * width + gx]; // thread writes to padded row
+  } else {
+    tile[ty][tx] = 0.0f;                 // bounds safety
+  }
+  __syncthreads();
+
+  // Transpose write back: threads read from shared memory with no bank conflicts
+  int rx = by + tx;                     // rotated indices for transpose
+  int ry = bx + ty;
+  if (rx < height && ry < width) {
+    dst[rx * width + ry] = tile[tx][ty]; // reads are conflict-free due to padding
+  }
+}
