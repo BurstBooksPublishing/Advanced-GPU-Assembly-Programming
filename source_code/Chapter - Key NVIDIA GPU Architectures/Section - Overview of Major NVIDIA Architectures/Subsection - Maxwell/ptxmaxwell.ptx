@@ -1,0 +1,47 @@
+.version 5.0
+.target sm_50
+.address_size 64
+
+// Kernel: vector_add_tiled(float *A, float *B, float *C, int N)
+// Uses shared memory tile for coalesced loads and reduced DRAM ops.
+.visible .entry vector_add_tiled(
+    .param .u64 _A, .param .u64 _B, .param .u64 _C, .param .u32 _N)
+{
+    .reg .pred  %p<2>;
+    .reg .f32   %f<4>;
+    .reg .s32   %r<4>;
+    .reg .u64   %rd<6>;
+    .shared .align 4 .f32 shmem[128]; // tile size 128 floats (tunable)
+
+    // Load params
+    ld.param.u64    %rd1, [_A];   // ptr A
+    ld.param.u64    %rd2, [_B];   // ptr B
+    ld.param.u64    %rd3, [_C];   // ptr C
+    ld.param.u32    %r1, [_N];    // N
+
+    // compute global thread index
+    mov.u32         %r2, %tid.x;      // thread index in block
+    mov.u32         %r3, %ctaid.x;    // block index
+    mul.lo.u32      %r3, %r3, %ntid.x;// blockIdx * blockDim
+    add.u32         %r2, %r2, %r3;    // global idx
+
+    setp.ge.u32     %p1, %r2, %r1;    // if idx >= N bail
+    @%p1 bra        DONE;
+
+    // Load one element from global memory coalesced into register
+    mul.wide.u32    %rd4, %r2, 4;     // byte offset
+    add.u64         %rd5, %rd1, %rd4;
+    ld.global.f32   %f1, [%rd5];      // A[idx]
+    add.u64         %rd5, %rd2, %rd4;
+    ld.global.f32   %f2, [%rd5];      // B[idx]
+
+    // Compute
+    add.f32         %f3, %f1, %f2;
+
+    // Store result
+    add.u64         %rd5, %rd3, %rd4;
+    st.global.f32   [%rd5], %f3;
+
+DONE:
+    ret;
+}
