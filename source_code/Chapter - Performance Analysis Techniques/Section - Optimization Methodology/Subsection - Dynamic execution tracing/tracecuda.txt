@@ -1,0 +1,37 @@
+struct TraceEntry { unsigned long long ts; unsigned int smid; unsigned int warp_id; unsigned int event_id; }; // 16 bytes aligned
+
+__device__ unsigned long long global_trace_idx;      // atomic reservation counter
+__device__ TraceEntry *device_trace_buf;            // allocated on host & copied to device
+
+// read SMID via inline PTX; read clock via clock64()
+__device__ __inline__ unsigned int get_smid() {
+  unsigned int sm;
+  asm volatile("mov.u32 %0, %smid;" : "=r"(sm));
+  return sm;
+}
+
+__device__ __inline__ unsigned long long get_clock64() {
+  return clock64();
+}
+
+__device__ void trace_event(unsigned int event_id) {
+  unsigned int lane = threadIdx.x & 0x1f;                 // lane in warp (NVIDIA)
+  unsigned int warp = (blockIdx.x * blockDim.x + threadIdx.x) >> 5; // global warp id
+  unsigned long long base;
+  if (lane == 0) {                                       // warp leader reserves contiguous slots
+    base = atomicAdd(&global_trace_idx, 1ULL);           // reserve 1 entry per warp-event
+    device_trace_buf[base].ts = get_clock64();          // leader writes its view
+    device_trace_buf[base].smid = get_smid();
+    device_trace_buf[base].warp_id = warp;
+    device_trace_buf[base].event_id = event_id;
+  }
+  // remaining lanes do nothing; leader already recorded warp-level trace
+}
+
+extern "C" __global__ void traced_kernel(float *data, size_t N) {
+  // compute work...
+  // instrumented region: mark entering critical memory phase
+  trace_event(1); // event id 1 = start memory phase
+  // memory-heavy work here
+  trace_event(2); // event id 2 = end memory phase
+}
