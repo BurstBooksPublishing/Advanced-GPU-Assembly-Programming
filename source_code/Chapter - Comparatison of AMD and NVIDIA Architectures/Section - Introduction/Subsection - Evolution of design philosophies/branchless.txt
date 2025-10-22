@@ -1,0 +1,21 @@
+#include 
+
+// Kernel: branchless ReLU and warp-sum (assumes n multiple of warp size for simplicity)
+__global__ void branchless_relu_warpsum(float* data, int n) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n) return;                 // simple bounds check
+
+  float v = data[idx];
+  // Branchless ReLU: compiled to predicated/max instruction; avoids divergent branches
+  float relu = fmaxf(0.0f, v);
+  data[idx] = relu;
+
+  // Warp-wide sum using shuffle down; deterministic warp-synchronous pattern
+  unsigned mask = 0xffffffff;
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    float other = __shfl_down_sync(mask, relu, offset);
+    relu += other;                       // accumulation without branch divergence
+  }
+  // lane 0 of each warp now holds the warp-sum (store optionally)
+  if ((threadIdx.x & 31) == 0) data[idx] = relu; // write-out by lane 0
+}
