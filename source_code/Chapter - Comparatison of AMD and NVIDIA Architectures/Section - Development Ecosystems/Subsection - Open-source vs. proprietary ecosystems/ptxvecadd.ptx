@@ -1,0 +1,40 @@
+.version 7.5                   // PTX version
+.target sm_70                  // target architecture
+.address_size 64
+
+.visible .entry vector_add(
+    .param .u64 param_a,
+    .param .u64 param_b,
+    .param .u64 param_c,
+    .param .u32 param_n
+)
+{
+    .reg .u32 tid;
+    .reg .u32 N;
+    .reg .u64 a_ptr, b_ptr, c_ptr;
+    .reg .u64 off, a_addr, b_addr, c_addr;
+    .reg .f32 fa, fb, fc;
+    .reg .pred p;
+
+    ld.param.u64 a_ptr, [param_a];     // load device pointers
+    ld.param.u64 b_ptr, [param_b];
+    ld.param.u64 c_ptr, [param_c];
+    ld.param.u32 N, [param_n];
+
+    mov.u32 tid, %tid.x;               // thread index in x-dim
+    setp.ge.u32 p, tid, N;             // bounds check
+    @p bra DONE;
+
+    mul.wide.u32 off, tid, 4;          // compute byte offset
+    add.u64 a_addr, a_ptr, off;        // compute element addresses
+    add.u64 b_addr, b_ptr, off;
+    add.u64 c_addr, c_ptr, off;
+
+    ld.global.f32 fa, [a_addr];        // load operands
+    ld.global.f32 fb, [b_addr];
+    add.f32 fc, fa, fb;                // compute
+    st.global.f32 [c_addr], fc;        // store result
+
+DONE:
+    ret;
+}
