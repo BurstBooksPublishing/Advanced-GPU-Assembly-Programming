@@ -1,0 +1,40 @@
+.version 6.4
+.target sm_70
+.address_size 64
+
+.visible .entry vadd(
+  .param .u64 p_a,    // pointer A (device)
+  .param .u64 p_b,    // pointer B (device)
+  .param .u64 p_c,    // pointer C (device)
+  .param .u32 n)      // element count
+{
+  .reg .u32   %r<3>;
+  .reg .u64   %rd<6>;
+  .reg .f32   %f<3>;
+
+  ld.param.u64 %rd1, [p_a];         // load device pointer for A
+  ld.param.u64 %rd2, [p_b];         // load device pointer for B
+  ld.param.u64 %rd3, [p_c];         // load device pointer for C
+  ld.param.u32 %r1,    [n];         // load n
+
+  mov.u32 %r2, %tid.x;              // thread index in x
+  cvt.u64.u32 %rd4, %r2;            // convert index to 64-bit
+  mul.wide.u32 %rd5, %r2, 4;        // byte offset (float32 -> 4 bytes)
+
+  setp.ge.u32 %p1, %r2, %r1;        // bounds check: if idx >= n
+  @%p1 bra DONE;                    // exit if out of range
+
+  add.u64 %rd6, %rd1, %rd5;         // address A[idx]
+  ld.global.f32 %f1, [%rd6];        // load A[idx]
+
+  add.u64 %rd6, %rd2, %rd5;         // address B[idx]
+  ld.global.f32 %f2, [%rd6];        // load B[idx]
+
+  add.f32 %f3, %f1, %f2;            // compute C = A + B
+
+  add.u64 %rd6, %rd3, %rd5;         // address C[idx]
+  st.global.f32 [%rd6], %f3;        // store result
+
+DONE:
+  ret;                              // return from kernel
+}
