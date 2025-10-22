@@ -1,0 +1,61 @@
+extern "C" __global__ void kahan_block_reduce(const double * __restrict__ a, 
+                                              double * __restrict__ out, 
+                                              size_t N) {
+  // Each thread processes a strided chunk
+  unsigned int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  unsigned int lane = threadIdx.x & 31;           // lane in warp
+  unsigned int warp_id = threadIdx.x >> 5;        // warp within block
+  double sum = 0.0;                               // running sum
+  double c = 0.0;                                 // compensation
+
+  // Strided load for good coalescing
+  for (size_t i = tid; i < N; i += gridDim.x * blockDim.x) {
+    double x = a[i];
+    // Kahan update per-thread
+    double y = x - c;
+    double t = sum + y;
+    c = (t - sum) - y;
+    sum = t;
+  }
+
+  // Warp-level reduction: propagate (sum,c) with shuffles
+  // Represent pair as two doubles; perform Kahan-style merge when combining
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    double other_sum = __shfl_down_sync(0xffffffff, sum, offset);
+    double other_c   = __shfl_down_sync(0xffffffff, c,   offset);
+    if (lane < offset) {
+      // Merge other's contribution into my (sum,c)
+      double y = other_sum - c;
+      double t = sum + y;
+      c = (t - sum) - y + other_c; // combine compensations
+      sum = t;
+    }
+  }
+
+  // First lane of each warp writes to shared memory
+  __shared__ double warp_sums[32]; // supports up to 1024 threads/block
+  __shared__ double warp_cs[32];
+  if (lane == 0) {
+    warp_sums[warp_id] = sum;
+    warp_cs[warp_id] = c;
+  }
+  __syncthreads();
+
+  // Let first warp finish final reduction over warp_sums
+  if (warp_id == 0) {
+    sum = (threadIdx.x < (blockDim.x>>5)) ? warp_sums[lane] : 0.0;
+    c   = (threadIdx.x < (blockDim.x>>5)) ? warp_cs[lane]   : 0.0;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      double other_sum = __shfl_down_sync(0xffffffff, sum, offset);
+      double other_c   = __shfl_down_sync(0xffffffff, c,   offset);
+      if (lane < offset) {
+        double y = other_sum - c;
+        double t = sum + y;
+        c = (t - sum) - y + other_c;
+        sum = t;
+      }
+    }
+    // lane 0 writes the block result
+    if (lane == 0) out[blockIdx.x] = sum;
+  }
+}
