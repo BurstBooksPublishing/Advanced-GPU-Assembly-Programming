@@ -1,0 +1,43 @@
+.version 6.4                       // PTX version
+.target sm_70                      // target architecture (select appropriate SM)
+.address_size 64
+
+.visible .entry vec_add(
+    .param .u64 __param_in,        // pointer to input A
+    .param .u64 __param_out,       // pointer to output
+    .param .u32 __param_n)         // element count
+{
+    .reg .pred  %p<2>;             // predicate registers
+    .reg .f32   %f<4>;             // floating-point registers
+    .reg .b64   %rd<6>;            // 64-bit address/temp registers
+    .shared .b8 sdata[256];        // small shared region for demonstration
+
+    // Load kernel parameters into registers
+    ld.param.u64    %rd1, [__param_in];   // %rd1 = input base
+    ld.param.u64    %rd2, [__param_out];  // %rd2 = output base
+    ld.param.u32    %r2, [__param_n];     // %r2 = N (auto-mapped to %r2)
+
+    // Compute global thread index in %rd3
+    mov.u32     %r1, %tid.x;               // per-thread id (implicit mapping)
+    cvt.u64.u32 %rd3, %r1;
+
+    // Bounds check using predicate
+    setp.ge.u32 %p1, %r1, %r2;             // %p1 = (tid >= N)
+    @%p1 bra    DONE;                       // exit if out of range
+
+    // Load A[i] into %f1
+    mul.wide.u32 %rd4, %r1, 4;             // byte offset
+    add.u64      %rd5, %rd1, %rd4;         // address = base + offset
+    ld.global.f32 %f1, [%rd5];             // load value
+
+    // Simple compute: add constant 1.0f
+    mov.f32 %f2, 1.0;                      // immediate float
+    add.f32 %f3, %f1, %f2;                 // f3 = f1 + 1.0
+
+    // Store result
+    add.u64 %rd5, %rd2, %rd4;
+    st.global.f32 [%rd5], %f3;
+
+DONE:
+    ret;
+}
