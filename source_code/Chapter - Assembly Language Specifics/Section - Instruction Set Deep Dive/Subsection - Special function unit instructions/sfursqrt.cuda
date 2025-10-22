@@ -1,0 +1,23 @@
+extern "C" __global__ void rsqrt_refine(float *out, const float *in, int n) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;              // global thread id
+  if (tid >= n) return;                                         // bounds check
+
+  float x = in[tid];
+  // Predicated domain check using a conditional predicate; avoid SFU for non-positive inputs
+  if (x <= 0.0f) {                                              // mask invalid lanes
+    out[tid] = CUDART_NAN_F;                                    // set NaN for invalid domain
+    return;
+  }
+
+  // SFU-provided fast estimate (hardware rsqrt approximation)
+  float y0 = rsqrtf(x);                                         // maps to SFU approx
+
+  // Newton-Raphson refinement: y1 = y0 * (1.5 - 0.5 * x * y0*y0)
+  // Use FMA where possible to reduce rounding (compiler emits FMA).
+  const float c1 = 1.5f;                                        // encoded immediate
+  const float c2 = 0.5f;                                        // encoded immediate
+  float t = y0 * y0;                                            // y0^2
+  float u = fmaf(-c2 * x, t, c1);                               // fused: c1 + (-0.5*x)*t
+  float y1 = y0 * u;                                            // final refined rsqrt
+  out[tid] = y1;
+}
