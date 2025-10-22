@@ -1,0 +1,36 @@
+extern "C" __global__
+void coop_gather(const float * __restrict__ src, const int * __restrict__ idx,
+                 float * __restrict__ dst, int N) {
+  extern __shared__ float sdata[];                // per-block LDS/staging
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int lane = threadIdx.x & 31;                    // lane within warp (NVIDIA)
+  int warp_id = threadIdx.x >> 5;
+  int warp_global = (blockIdx.x * (blockDim.x/32)) + warp_id;
+  if (tid >= N) return;
+
+  // Step 1: each thread loads its index; warp groups indices into contiguous buckets.
+  int target = idx[tid];                          // possibly scattered source index
+  // Compute warp-local slot for coalesced load: leader loads block starting at base.
+  int base = (target / 32) * 32;                  // align to 32-element block
+
+  // Leader loads a 32-wide coalesced block into shared memory (one per warp)
+  if (lane == 0) {
+    int start = base;
+    // vector load of 8 floats at a time reduces transactions (if aligned)
+    for (int i=0; i<32; i+=8) {
+      int gidx = start + i;
+      // bounds-check; load into shared mem to preserve alignment
+      float4 v = reinterpret_cast(src)[gidx/4]; // vectorized read
+      // copy v into sdata[warp_global*32 + i .. +i+3] (unrolled)
+      int off = (warp_global * 32) + i;
+      sdata[off + 0] = v.x; sdata[off + 1] = v.y;
+      sdata[off + 2] = v.z; sdata[off + 3] = v.w;
+    }
+  }
+  __syncwarp();                                   // ensure leader wrote staging
+
+  // Step 2: each lane picks its element from staging
+  int lane_offset = (warp_global * 32) + (target - base);
+  float val = sdata[lane_offset];
+  dst[tid] = val;                                 // now each thread has its gathered value
+}
