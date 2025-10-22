@@ -1,0 +1,51 @@
+# Small directory-based cache simulator for two CUs.
+# Run to observe invalidation and ownership transitions.
+
+class Directory:
+    def __init__(self):
+        self.state = 'I'   # 'I', 'S', or 'M'
+        self.sharers = set()
+        self.owner = None
+
+    def read(self, cu):
+        if self.state == 'I':
+            # bring into shared state
+            self.state = 'S'
+            self.sharers = {cu}
+        elif self.state == 'S':
+            self.sharers.add(cu)
+        elif self.state == 'M':
+            # owner downgrades to shared (simulate writeback)
+            self.sharers = {self.owner, cu}
+            self.state = 'S'
+            self.owner = None
+        return f"CU{cu} read: state={self.state}, sharers={self.sharers}"
+
+    def write(self, cu):
+        if self.state == 'I':
+            self.state = 'M'
+            self.owner = cu
+            self.sharers = set()
+            return f"CU{cu} write: granted M"
+        elif self.state == 'S':
+            # issue invalidations to other sharers
+            invalidated = [s for s in self.sharers if s != cu]
+            self.sharers = set()
+            self.state = 'M'
+            self.owner = cu
+            return f"CU{cu} write: invalidated {invalidated}, now owner"
+        elif self.state == 'M':
+            if self.owner == cu:
+                return f"CU{cu} write: already owner"
+            else:
+                # request owner to transfer
+                prev = self.owner
+                self.owner = cu
+                return f"CU{cu} write: stole ownership from CU{prev}"
+
+# Example run:
+d = Directory()
+print(d.read(0))    # CU0 reads
+print(d.read(1))    # CU1 reads => shared
+print(d.write(0))   # CU0 writes => invalidates CU1
+print(d.read(1))    # CU1 reads => downgrades owner to shared
