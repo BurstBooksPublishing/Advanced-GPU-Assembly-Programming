@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+# production-ready CSV parser to compute stall breakdowns.
+import csv
+import sys
+
+def safe_float(d, key):
+    v = d.get(key, '')
+    return float(v) if v != '' else None
+
+def analyze_row(row):
+    elapsed = safe_float(row, 'cycles_elapsed')
+    active  = safe_float(row, 'cycles_active')
+    if elapsed is None or active is None:
+        raise ValueError('Required counters missing: cycles_elapsed/cycles_active')
+    stalled = elapsed - active
+    # read optional per-reason counters
+    mem = safe_float(row, 'mem_wait_cycles') or 0.0
+    issue = safe_float(row, 'issue_stall_cycles') or 0.0
+    sync = safe_float(row, 'sync_wait_cycles') or 0.0
+    fetch = safe_float(row, 'fetch_stall_cycles') or 0.0
+
+    # prevent division by zero
+    stall_frac = stalled / elapsed if elapsed > 0 else 0.0
+    per_reason = {}
+    denom = stalled if stalled > 0 else 1.0
+    per_reason['mem'] = mem / denom
+    per_reason['issue'] = issue / denom
+    per_reason['sync'] = sync / denom
+    per_reason['fetch'] = fetch / denom
+
+    return {
+        'elapsed': elapsed,
+        'active': active,
+        'stalled': stalled,
+        'stall_fraction': stall_frac,
+        'per_reason': per_reason
+    }
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        print('Usage: python3 lst_stall_breakdown.py counters.csv'); sys.exit(1)
+    with open(sys.argv[1], newline='') as f:
+        reader = csv.DictReader(f)
+        for i, row in enumerate(reader):
+            out = analyze_row(row)
+            print(f'Row {i}: Elapsed={out["elapsed"]:.0f} Active={out["active"]:.0f} '
+                  f'Stalled={out["stalled"]:.0f} StallFrac={out["stall_fraction"]:.3f}')
+            for k,v in out['per_reason'].items():
+                print(f'  {k:6}: {v:.2%}')
