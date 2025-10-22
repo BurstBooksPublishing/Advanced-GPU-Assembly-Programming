@@ -1,0 +1,36 @@
+#include <cooperative_groups.h>
+/* Template SUBGROUP_SZ: compile-time subgroup width (32 for NVIDIA, 64 for AMD waves) */
+template<int SUBGROUP_SZ>
+__global__ void subgroup_reduce(float *data, float *out, int n) {
+  extern __shared__ float sdata[];              // shared memory fallback (LDS equivalent)
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  float val = (gid < n) ? data[gid] : 0.0f;
+  // Lane id within subgroup
+  int lane = threadIdx.x % SUBGROUP_SZ;
+  // Fast path: if SUBGROUP_SZ == 32, use warp shuffle (NVIDIA efficient)
+  if constexpr (SUBGROUP_SZ == 32) {
+    unsigned mask = 0xffffffffu;                // full-warp mask
+    // warp-level tree reduction using shuffle down
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      float y = __shfl_down_sync(mask, val, offset);
+      val += y;
+    }
+    // write per-subgroup result by lane 0
+    if ((lane) == 0) out[blockIdx.x * (blockDim.x / SUBGROUP_SZ) + threadIdx.x / SUBGROUP_SZ] = val;
+  } else {
+    // Fallback: use shared memory tree to support other subgroup widths (AMD wave64 etc.)
+    int sg_id = (threadIdx.x / SUBGROUP_SZ);    // subgroup index in block
+    int sg_lane = lane;
+    int base = sg_id * SUBGROUP_SZ;
+    // store into shared memory per-subgroup region
+    sdata[base + sg_lane] = val;
+    __syncthreads();                             // ensure writes visible to subgroup
+    // tree reduction in shared memory
+    for (int stride = SUBGROUP_SZ >> 1; stride > 0; stride >>= 1) {
+      if (sg_lane < stride) sdata[base + sg_lane] += sdata[base + sg_lane + stride];
+      __syncthreads();
+    }
+    if (sg_lane == 0) out[blockIdx.x * (blockDim.x / SUBGROUP_SZ) + sg_id] = sdata[base];
+  }
+}
+/* Host launches would set SUBGROUP_SZ=32 for NVIDIA, SUBGROUP_SZ=64 for AMD, and tune block size */
