@@ -1,0 +1,15 @@
+// assume %r1 holds predicate value, %f1 %f2 are floats
+        setp.gt.s32   %p1, %r1, 0;            // create predicate (p1)
+        @%p1          bra     BR_TAKEN;      // branch when p1 true
+        // NOT TAKEN path (masked off for taken threads)
+        add.f32       %f2, %f2, 1.0;         // short op in else
+        bra           JOIN;                  // avoid fallthrough ambiguity
+BR_TAKEN:
+        // TAKEN path (masked off for not-taken threads)
+        mul.f32       %f2, %f2, 2.0;         // short op in then
+JOIN:
+        // reconverged here by hardware post-dominator
+        // --- Predicated rewrite avoids branch/stack ---
+        setp.gt.s32   %p2, %r1, 0;           // predicate copy (p2)
+        @%p2          mul.f32   %f3, %f3, 2.0; // executed only by p2 lanes
+        @!%p2         add.f32   %f3, %f3, 1.0; // executed only by !p2 lanes
