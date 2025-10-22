@@ -1,0 +1,36 @@
+extern "C" __global__
+void vec_add_pack(const float * __restrict__ A, const float * __restrict__ B,
+                  float * __restrict__ C, int N) {
+  // each thread handles 4 contiguous elements (pack factor p = 4)
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = gridDim.x * blockDim.x;
+
+  // reinterpret pointers as vectorized views for aligned accesses
+  const int NV = N / 4;                     // number of float4 elements
+  const float4 *Av = reinterpret_cast(A);
+  const float4 *Bv = reinterpret_cast(B);
+  float4 *Cv = reinterpret_cast(C);
+
+  for (int i = tid; i < NV; i += stride) {
+    // vector load: each float4 element occupies 4 floats in registers
+    float4 a = Av[i];   // now 4 floats are resident in registers
+    float4 b = Bv[i];
+    // element-wise add using registers (no memory traffic for temporaries)
+    float4 r;
+    r.x = a.x + b.x;    // these scalar fields map to registers
+    r.y = a.y + b.y;
+    r.z = a.z + b.z;
+    r.w = a.w + b.w;
+    // vector store coalesced back to global memory
+    Cv[i] = r;
+  }
+
+  // tail case: remaining elements when N % 4 != 0 handled by scalar loop
+  int tail_start = NV * 4;
+  for (int idx = tid * 4 + 0; idx < N; idx += stride * 4) {
+    for (int j = 0; j < 4; ++j) {
+      int g = idx + j;
+      if (g >= tail_start && g < N) C[g] = A[g] + B[g];
+    }
+  }
+}
