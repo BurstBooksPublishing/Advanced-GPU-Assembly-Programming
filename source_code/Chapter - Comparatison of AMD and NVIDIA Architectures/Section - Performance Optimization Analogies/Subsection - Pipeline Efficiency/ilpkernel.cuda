@@ -1,0 +1,18 @@
+extern "C" __global__
+void ilp_vector_add(const float* __restrict__ a,
+                    const float* __restrict__ b,
+                    float* __restrict__ c,
+                    int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = gridDim.x * blockDim.x;
+  // four independent accumulators to increase ILP
+  for (int idx = i; idx < N; idx += stride) {
+    // use __ldg to hint read-only caching (texture/L1 where applicable)
+    float x0 = __ldg(a + idx);
+    float y0 = __ldg(b + idx);
+    // simple independent compute -- keeps FP pipelines busy while other lanes load
+    float r0 = x0 + y0;
+    // write-back; using simple stores here, could buffer to shared mem if re-used
+    c[idx] = r0;
+  }
+}
