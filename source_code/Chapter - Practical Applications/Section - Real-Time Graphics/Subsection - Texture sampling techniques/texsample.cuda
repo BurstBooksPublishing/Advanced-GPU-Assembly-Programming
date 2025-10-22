@@ -1,0 +1,11 @@
+#include 
+
+extern "C" __global__ void sampleKernel(cudaTextureObject_t texObj, float2 uvBase,
+                                        float2 ddx, float2 ddy, float4* out) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  // compute per-thread uv from base (example: screen-space mapping)
+  float2 uv = uvBase + make_float2(gid % 1024, gid / 1024) * 0.0009765625f; // comment: map to [0,1)
+  // explicit gradient sampling ensures deterministic LOD and avoids divergent implicit derivatives
+  float4 val = tex2DGrad(texObj, uv.x, uv.y, ddx.x, ddy.x); // device builtin; returns filtered texel
+  out[gid] = val; // write sampled color
+}
