@@ -1,0 +1,16 @@
+#include 
+
+texture texRef; // legacy texref
+
+__global__ void compute_kernel(const float* __restrict__ data, float* out, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= N) return;
+
+    // __ldg hints the compiler to use the read-only cache (RO/TEX path).
+    float a = __ldg(&data[idx]);            // read-only cached global load
+    float b = tex1Dfetch(texRef, idx);      // texture fetch via TMU + TEX cache
+
+    // simple compute to avoid optimizing loads away
+    out[idx] = a * 0.7f + b * 0.3f;
+}
+// Host code must bind 'data' to texRef before launching.
