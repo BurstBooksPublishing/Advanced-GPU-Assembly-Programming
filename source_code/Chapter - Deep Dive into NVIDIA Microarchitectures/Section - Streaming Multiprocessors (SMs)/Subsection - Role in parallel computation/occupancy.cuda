@@ -1,0 +1,44 @@
+#include <cuda_runtime.h>
+#include <stdio.h>
+
+// Simple kernel: each thread adds one element.
+__global__ void vecAdd(const float *A, const float *B, float *C, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < N)
+    C[idx] = A[idx] + B[idx];
+}
+
+int main() {
+  const int threadsPerBlock = 256;
+  const int blocks = 1024;
+  const int N = threadsPerBlock * blocks;
+
+  // Query maximum active blocks per SM for given kernel configuration.
+  int activeBlocksPerSM = 0;
+  cudaError_t err = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &activeBlocksPerSM, vecAdd, threadsPerBlock, 0);
+  if (err != cudaSuccess) {
+    fprintf(stderr, "Occupancy query failed: %s\n", cudaGetErrorString(err));
+    return 1;
+  }
+
+  // Compute occupancy in warps (warp size = 32 on NVIDIA GPUs).
+  int warpSize = 32;
+  int activeWarpsPerSM = (activeBlocksPerSM * threadsPerBlock) / warpSize;
+  printf("Active blocks/SM: %d, Active warps/SM: %d\n",
+         activeBlocksPerSM, activeWarpsPerSM);
+
+  // Allocate and run minimal test kernel
+  float *dA, *dB, *dC;
+  cudaMalloc(&dA, N * sizeof(float));
+  cudaMalloc(&dB, N * sizeof(float));
+  cudaMalloc(&dC, N * sizeof(float));
+
+  vecAdd<<<blocks, threadsPerBlock>>>(dA, dB, dC, N);
+  cudaDeviceSynchronize();
+
+  cudaFree(dA);
+  cudaFree(dB);
+  cudaFree(dC);
+  return 0;
+}
