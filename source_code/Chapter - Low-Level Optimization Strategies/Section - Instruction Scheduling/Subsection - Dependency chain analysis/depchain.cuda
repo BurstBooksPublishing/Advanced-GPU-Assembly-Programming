@@ -1,0 +1,40 @@
+extern "C" __global__ void naive_kernel(const float * __restrict__ a,
+                                        const float * __restrict__ b,
+                                        float * __restrict__ out,
+                                        int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  float acc = 0.0f;                     // single accumulator -> long chain
+  for (int k = 0; k < N; ++k) {
+    // load-use sequence forms RAW chain if compiler doesn't reorder
+    float va = a[i * N + k];            // global load
+    float vb = b[i * N + k];            // global load
+    acc = acc + va * vb;                // dependent on previous acc
+  }
+  out[i] = acc;
+}
+
+extern "C" __global__ void optimized_kernel(const float * __restrict__ a,
+                                            const float * __restrict__ b,
+                                            float * __restrict__ out,
+                                            int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  float acc0 = 0.0f, acc1 = 0.0f;       // two independent accumulators
+  int k = 0;
+  // simple 2-way unroll to break dependency chains and expose ILP
+  for (; k + 1 < N; k += 2) {
+    // loads are independent; compiler can schedule these to hide loads
+    float a0 = a[i * N + k];            // load 0
+    float b0 = b[i * N + k];
+    float a1 = a[i * N + k + 1];        // load 1 (independent)
+    float b1 = b[i * N + k + 1];
+    acc0 = acc0 + a0 * b0;              // chain 0
+    acc1 = acc1 + a1 * b1;              // chain 1 (independent)
+  }
+  // handle remaining element
+  for (; k < N; ++k) {
+    float va = a[i * N + k];
+    float vb = b[i * N + k];
+    acc0 = acc0 + va * vb;
+  }
+  out[i] = acc0 + acc1;                 // final reduction
+}
