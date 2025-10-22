@@ -1,0 +1,40 @@
+#include <cuda_runtime.h>
+#include <chrono>
+#include <cstdio>
+
+__global__ void compute_kernel(float *out, int iter) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  float x = i + 1.0f;
+  // loop of FMAs to stress ALU/tensor pipelines (compute-bound)
+  for (int k = 0; k < iter; ++k) x = fmaf(x, 1.000001f, 0.000001f);
+  out[i] = x;
+}
+
+__global__ void stream_kernel(const float *in, float *out, int n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) out[i] = in[i]; // simple streaming copy (memory-bound)
+}
+
+int main() {
+  const int N = 1<<20; // 1M elements
+  const int threads = 256;
+  const int blocks = (N + threads - 1) / threads;
+  float *d_in, *d_out;
+  cudaMalloc(&d_in, N*sizeof(float)); cudaMalloc(&d_out, N*sizeof(float));
+  // warmup
+  compute_kernel<<<blocks, threads>>>(d_out, 1000); cudaDeviceSynchronize();
+  // timed compute
+  auto t0 = std::chrono::high_resolution_clock::now();
+  compute_kernel<<<blocks, threads>>>(d_out, 10000); cudaDeviceSynchronize();
+  auto t1 = std::chrono::high_resolution_clock::now();
+  double sec_compute = std::chrono::duration<double>(t1-t0).count();
+  // timed memory
+  t0 = std::chrono::high_resolution_clock::now();
+  stream_kernel<<<blocks, threads>>>(d_in, d_out, N); cudaDeviceSynchronize();
+  t1 = std::chrono::high_resolution_clock::now();
+  double sec_mem = std::chrono::duration<double>(t1-t0).count();
+  printf("Compute kernel time: %.6f s\n", sec_compute);
+  printf("Memory kernel time:  %.6f s\n", sec_mem);
+  cudaFree(d_in); cudaFree(d_out);
+  return 0;
+}
