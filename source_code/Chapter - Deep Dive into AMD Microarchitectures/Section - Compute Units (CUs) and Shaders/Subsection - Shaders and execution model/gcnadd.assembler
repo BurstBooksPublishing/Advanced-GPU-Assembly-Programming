@@ -1,0 +1,3 @@
+; v0..v1: input vectors in VGPRs; v2: output VGPR
+V_ADD_F32 v2, v0, v1        ; per-lane single-precision add (vector ALU)
+S_ENDPGM                    ; terminate the wave/program
