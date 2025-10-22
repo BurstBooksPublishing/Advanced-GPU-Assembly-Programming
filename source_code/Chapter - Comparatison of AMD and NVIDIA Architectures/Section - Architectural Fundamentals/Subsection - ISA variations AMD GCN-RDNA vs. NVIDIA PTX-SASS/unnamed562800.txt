@@ -1,0 +1,18 @@
+Assembler},caption={AMD GCN/RDNA vs NVIDIA PTX example: FMA-like sequence},label={lst:isafma}]
+# AMD (amdgpu-like) -- vector and scalar regs explicit
+v_mul_f32 v0, v1, v2        # v0 = v1 * v2        ; vector VGPR multiply
+v_add_f32 v0, v0, v3        # v0 = v0 + v3        ; vector add
+s_waitcnt vmcnt(0)          # wait for vector mem ops (if any)
+s_barrier                   # optional sync for a workgroup
+
+// NVIDIA PTX (virtual ISA) -- uses virtual registers and predicates
+.version 7.0
+.target sm_80
+.address_size 64
+.visible .entry fma_kernel()
+{
+    .reg .f32 f1, f2, f3;
+    mul.f32 f2, f1, f3       // f2 = f1 * f3
+    add.f32 f1, f2, f3       // f1 = f2 + f3
+    ret
+}
