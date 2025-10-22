@@ -1,0 +1,33 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+.visible .entry ticket_sync(
+    .param .u64 counter_ptr  // pointer to global counter
+)
+{
+    .reg .u32  %r0;          // return register from atomics
+    .reg .u32  %r1;          // temporary
+    .reg .u64  %rd1;         // pointer reg
+    ld.param.u64 %rd1, [counter_ptr];   // load pointer
+    cvta.to.global.u64 %rd1, %rd1;      // convert to global addr
+
+    // Atomically increment global counter; %r0 = previous value
+    atom.global.add.u32 %r0, [%rd1], 1; // ticket = prior value
+
+    // Spin until this thread's ticket reaches head (simplified fairness)
+    // Use atomicCAS to implement head pointer advance
+    // head_ptr assumed at counter_ptr + 8 (for demonstration only)
+    add.s64 %rd1, %rd1, 8;               // head pointer address
+1:
+    atom.global.cas.u32 %r1, [%rd1], %r0, %r0  // try CAS: if head==ticket, succeed
+    setp.eq.u32 %p1, %r1, %r0
+    @!%p1 bra 1b                          // loop until CAS succeeds
+
+    // All threads in CTA synchronize here before proceeding to use shared state
+    bar.sync 0;                           // CTA barrier id 0
+
+    // Ensure any writes to global memory by this CTA are visible to other CTAs
+    membar.cta;                           // CTA-scope memory fence
+    ret;
+}
