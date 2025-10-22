@@ -1,0 +1,47 @@
+#include <cuda_runtime.h>
+#include <mma.h>
+using namespace nvcuda::wmma;
+
+// Kernel computes C += A*B for 16×16 tiles using FP16 inputs and FP32 accumulation.
+extern "C" __global__
+void wmma_tile_mma(const half *A, const half *B, float *C,
+                   int M_tiles, int N_tiles, int K_tiles) {
+  int tx = threadIdx.x;
+  int ty = threadIdx.y;
+  int block_m = blockIdx.x;
+  int block_n = blockIdx.y;
+
+  fragment<accumulator, 16, 16, 16, float> c_frag;
+  fill_fragment(c_frag, 0.0f);
+
+  // Loop over K dimension tiles
+  for (int k = 0; k < K_tiles; k++) {
+    fragment<matrix_a, 16, 16, 16, half, row_major> a_frag;
+    fragment<matrix_b, 16, 16, 16, half, col_major> b_frag;
+
+    int a_offset = ((block_m * K_tiles + k) * 16 * 16);
+    int b_offset = ((k * N_tiles + block_n) * 16 * 16);
+
+    // Efficient tiled loads (uses LDMATRIX/CP.ASYNC on modern GPUs)
+    load_matrix_sync(a_frag, A + a_offset, 16);
+    load_matrix_sync(b_frag, B + b_offset, 16);
+
+    // Tensor Core multiply-accumulate
+    mma_sync(c_frag, a_frag, b_frag, c_frag);
+  }
+
+  // Write accumulated result back to global memory
+  int c_offset = ((block_m * N_tiles + block_n) * 16 * 16);
+  float c_tile[16 * 16];
+  store_matrix_sync(c_tile, c_frag, 16, mem_row_major);
+
+  // Cooperative write-back (simplified)
+  for (int i = tx; i < 16; i += blockDim.x) {
+    for (int j = ty; j < 16; j += blockDim.y) {
+      C[c_offset + i * 16 + j] += c_tile[i * 16 + j];
+    }
+  }
+
+  // Post-acceleration work (illustrative placeholder)
+  // Example: lightweight shader-style computation using updated C
+}
