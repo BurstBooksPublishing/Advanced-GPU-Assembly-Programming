@@ -1,0 +1,41 @@
+#include <cuda.h>
+#include <cuda_fp16.h>
+#include <mma.h>
+using namespace nvcuda::wmma;
+
+extern "C" __global__
+void wmma_gemm_fp16(const half *A, const half *B, float *C, int M, int N, int K) {
+  // One warp per block; require blockDim.x == 32.
+  if (threadIdx.x >= 32) return; // safety: ensure single warp.
+  int tile_m = blockIdx.y; // output tile row index
+  int tile_n = blockIdx.x; // output tile col index
+
+  // WMMA fragment declarations for A, B, and C
+  fragment<matrix_a, 16, 16, 16, half, row_major> a_frag;
+  fragment<matrix_b, 16, 16, 16, half, col_major> b_frag;
+  fragment<accumulator, 16, 16, 16, float> c_frag;
+
+  // Initialize accumulator fragment to values from global C (or zero)
+  int ldC = N;
+  float *C_tile_ptr = C + (tile_m * 16) * ldC + tile_n * 16;
+  load_matrix_sync(c_frag, C_tile_ptr, ldC, mem_row_major);
+
+  // Loop over K dimension in 16-step tiles
+  int K_tiles = K / 16;
+  int ldA = K; // A is MxK row-major
+  int ldB = N; // B is KxN row-major, but we use col_major load for WMMA
+  for (int t = 0; t < K_tiles; ++t) {
+    const half *A_tile = A + (tile_m * 16) * ldA + t * 16;
+    const half *B_tile = B + t * 16 * ldB + tile_n * 16;
+
+    // Load A and B tiles into WMMA fragments
+    load_matrix_sync(a_frag, A_tile, ldA);
+    load_matrix_sync(b_frag, B_tile, ldB);
+
+    // Tensor core MMA: c_frag += a_frag * b_frag
+    mma_sync(c_frag, a_frag, b_frag, c_frag);
+  }
+
+  // Store the accumulated C tile back to global memory
+  store_matrix_sync(C_tile_ptr, c_frag, ldC, mem_row_major);
+}
