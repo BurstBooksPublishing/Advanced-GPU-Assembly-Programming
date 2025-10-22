@@ -1,0 +1,19 @@
+__global__ void tiledAdd(const float * __restrict__ A, const float * __restrict__ B,
+                         float *C, int N) {
+  extern __shared__ float tile[];               // dynamic shared mem
+  const int tid = threadIdx.x + blockDim.x*threadIdx.y; // thread local id
+  const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int PAD = 1;                             // pad to avoid bank conflicts
+  int sidx = threadIdx.x + PAD * threadIdx.y;    // padded shared index
+
+  // Load with read-only cache to reduce L2 pressure
+  float a = (global_idx < N) ? __ldg(&A[global_idx]) : 0.0f;
+  float b = (global_idx < N) ? __ldg(&B[global_idx]) : 0.0f;
+
+  tile[sidx] = a;                                // write into bank-padded tile
+  __syncthreads();                               // ensure tile filled
+
+  // perform local work using padded indices, preventing bank serialization
+  float res = tile[sidx] + b;
+  if (global_idx < N) C[global_idx] = res;
+}
