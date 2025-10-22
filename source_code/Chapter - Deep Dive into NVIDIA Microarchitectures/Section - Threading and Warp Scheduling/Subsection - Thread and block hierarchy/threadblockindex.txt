@@ -1,0 +1,25 @@
+__global__ void matVecMul(const float *A, const float *x, float *y,
+                          int N) {
+    // Global thread index (1D grid assumed) //
+    int gid = blockIdx.x * blockDim.x + threadIdx.x;  // global element id
+    // Warp and lane computation //
+    int lane  = threadIdx.x & 31;                      // lane = threadIdx.x % 32
+    int warp  = threadIdx.x >> 5;                      // warp index inside block
+    // Cooperative reduction per block using shared memory (example) //
+    extern __shared__ float sdata[];                   // dynamic shared memory
+    float v = 0.0f;
+    if (gid < N) {
+        // Each thread computes one dot-product element (example) //
+        v = A[gid] * x[gid];
+    }
+    // Lane-local reduction (tree within warp) - warp-synchronous on recent GPUs //
+    for (int offset = 16; offset > 0; offset >>= 1) v += __shfl_down_sync(0xFFFFFFFF, v, offset);
+    if (lane == 0) sdata[warp] = v;                    // warp leader writes to shared memory
+    __syncthreads();                                   // ensure all warp leaders wrote
+    // Block-level reduction by first warp
+    if (warp == 0) {
+        float sum = (threadIdx.x < (blockDim.x+31)/32) ? sdata[lane] : 0.0f;
+        for (int offset = 16; offset > 0; offset >>= 1) sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+        if (lane == 0) y[blockIdx.x] = sum;            // write per-block result
+    }
+}
