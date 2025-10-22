@@ -1,0 +1,42 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+.visible .entry mix_pipeline(
+    .param .u64 __p_in,  // input pointer
+    .param .u64 __p_out, // output pointer
+    .param .u32 __p_n    // element count
+)
+{
+    .reg .pred  %p<2>;
+    .reg .b64   %rd<6>;
+    .reg .f32   %f<6>;
+    .reg .u32   %r<4>;
+
+    // load params
+    ld.param.u64  %rd1, [__p_in];   // pointer to input
+    ld.param.u64  %rd2, [__p_out];  // pointer to output
+    ld.param.u32  %r1, [__p_n];     // n
+
+    mov.u32 %r2, 0;                 // i = 0
+LOOP:
+    setp.ge.u32 %p0, %r2, %r1;      // loop exit pred
+    @%p0 bra DONE;
+
+    // address computation (ALU) then global load (memory)
+    mul.wide.u32 %rd3, %r2, 4;      // byte offset (ALU)
+    add.u64 %rd4, %rd1, %rd3;
+    ld.global.f32 %f1, [%rd4];      // L1/L2 path
+
+    // independent FMA chain to keep ALU busy (execution)
+    fma.rn.f32 %f2, %f1, %f1, %f1;  // SFU vs FP pipeline depending on op
+
+    // store result (memory write)
+    add.u64 %rd5, %rd2, %rd3;
+    st.global.f32 [%rd5], %f2;
+
+    add.u32 %r2, %r2, 1;            // i++
+    bra LOOP;
+DONE:
+    ret;
+}
