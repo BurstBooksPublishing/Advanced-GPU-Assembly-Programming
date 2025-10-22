@@ -1,0 +1,46 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+// Simple illustrative kernel that allocates many .reg temporaries.
+// Each .reg increases r and thus register pressure per thread.
+.entry high_reg_kernel(
+    .param .u64 ptrA, .param .u64 ptrB, .param .u64 ptrC, .param .u32 N
+){
+  .reg .u32 %r<40>;         // large temporary set (40 32-bit regs)
+  .reg .pred %p<4>;
+  .reg .u64 %rd<4>;
+
+  // Load kernel arguments (standard PTX ABI handling).
+  ld.param.u64 %rd1, [ptrA];
+  ld.param.u64 %rd2, [ptrB];
+  ld.param.u64 %rd3, [ptrC];
+  ld.param.u32 %r1, [N];
+
+  // Compute thread index (typical).
+  mov.u32 %r2, %tid.x;      // thread id in warp/block (compact use)
+  mul.lo.u32 %r3, %cta.id.x, %r1;
+
+  add.u32 %r4, %r3, %r2;    // global thread index
+
+  setp.ge.u32 %p1, %r4, %r1; // bounds check
+  @%p1 bra DONE;
+
+  // Chain of dependent computations that keep many temporaries live.
+  // Each step writes to distinct .reg to force long live ranges.
+  ld.global.u32 %r10, [%rd1 + %r4*4];
+  add.u32 %r11, %r10, 1;
+  mul.lo.u32 %r12, %r11, 3;
+  sub.u32 %r13, %r12, 7;
+  mad.lo.u32 %r14, %r13, %r11, %r10;
+  // ... repeat to occupy many registers ...
+  add.u32 %r25, %r24, %r23;
+  mul.lo.u32 %r26, %r25, %r22;
+  add.u32 %r27, %r26, %r21;
+
+  // Final store uses results kept in registers, causing full live ranges.
+  st.global.u32 [%rd3 + %r4*4], %r27;
+
+DONE:
+  ret;
+}
