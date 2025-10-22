@@ -1,0 +1,25 @@
+extern "C" __global__
+void spmv_csr_warp(int num_rows,
+                   const int *rowPtr, const int *colIdx,
+                   const double *val, const double *x, double *y)
+{
+  int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int warp_id = global_tid / 32;                  // one warp per row
+  int lane = threadIdx.x & 31;                    // lane within warp
+  if (warp_id >= num_rows) return;
+  int row = warp_id;
+  int row_start = rowPtr[row];
+  int row_end   = rowPtr[row + 1];
+  double sum = 0.0;
+  // Stride across nonzeros in the row: lane handles every 32nd entry
+  for (int idx = row_start + lane; idx < row_end; idx += 32) {
+    int c = colIdx[idx];                           // column index
+    double v = val[idx];                           // matrix value
+    double xv = __ldg(&x[c]);                      // read-only cached read
+    sum += v * xv;
+  }
+  // In-warp reduction using CUDA shuffles
+  for (int offset = 16; offset > 0; offset >>= 1)
+    sum += __shfl_down_sync(0xFFFFFFFFu, sum, offset);
+  if (lane == 0) y[row] = sum;                     // single writer per row
+}
