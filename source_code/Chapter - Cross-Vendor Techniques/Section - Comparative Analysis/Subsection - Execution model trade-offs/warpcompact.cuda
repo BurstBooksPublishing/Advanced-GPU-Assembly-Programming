@@ -1,0 +1,19 @@
+__global__ void compact_and_process(int *data, int N) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int lane = threadIdx.x & 31;               // lane within 32-thread warp
+  unsigned mask = 0xffffffffu;               // full warp mask
+  // Each thread decides if it has useful work (predicate).
+  bool has_work = (tid < N) && (data[tid] != 0);
+  unsigned ballot = __ballot_sync(mask, has_work); // warp-wide mask of active lanes
+  // compute prefix sum (popcount) among lower lanes to get compact index
+  int lanes_before = __popc(ballot & ((1u << lane) - 1));
+  if (has_work) {
+    // compacted index of this thread within active-lane array
+    int compact_idx = lanes_before;
+    // only active lanes perform heavy work; avoids divergent if/else serialization
+    int v = data[tid];
+    // ... perform computation on v ...
+    data[tid] = v * 2; // simple example operation
+  }
+  // optional: leader (first active lane) can aggregate results using __shfl_sync
+}
