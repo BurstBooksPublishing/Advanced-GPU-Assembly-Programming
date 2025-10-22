@@ -1,0 +1,28 @@
+#include 
+
+__device__ alignas(64) volatile int handoff_flag = 0; // single cache-line flag
+__device__ alignas(64) volatile int data_buf[16];     // aligned data buffer
+
+// Producer: writes data_buf then hands off via atomicExch and device fence
+__global__ void producer_kernel(int value) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    // pack data into cache-line; other threads could help for bandwidth
+    for (int i = 0; i < 16; ++i) data_buf[i] = value + i; // write to device memory
+    __threadfence();                       // ensure writes visible to other SMs
+    atomicExch((int*)&handoff_flag, 1);    // set flag to 1 atomically (visibility marker)
+  }
+}
+
+// Consumer: waits on flag then reads data_buf after confirming visibility
+__global__ void consumer_kernel(int *out) {
+  // simple spin-wait; real code should back off to avoid ROP/TMU contention
+  while (atomicAdd((int*)&handoff_flag, 0) == 0) { /* spin */ }
+  __threadfence();                   // ensure we observe latest device writes
+  // read data (one thread demonstrates)
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    int sum = 0;
+    for (int i = 0; i < 16; ++i) sum += data_buf[i];
+    *out = sum;                      // write result back to global mem
+    atomicExch((int*)&handoff_flag, 0); // reset flag if reuse needed
+  }
+}
