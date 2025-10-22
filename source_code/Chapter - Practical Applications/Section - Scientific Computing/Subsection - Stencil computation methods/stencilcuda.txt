@@ -1,0 +1,48 @@
+extern "C" __global__
+void stencil5_tiled(const float* __restrict__ in, float* __restrict__ out,
+                    int nx, int ny, float alpha, int pitch) {
+  const int r = 1;                         // halo radius
+  const int Tx = 32, Ty = 8;               // tile interior (choose to fit SM)
+  __shared__ float tile[ (Ty + 2*r) ][ (Tx + 2*r) + 1 ]; // +1 to avoid bank conflicts
+
+  // global coordinates of thread's computed point inside tile
+  int bx = blockIdx.x * Tx;
+  int by = blockIdx.y * Ty;
+  int tx = threadIdx.x;                    // 0..Tx-1 (use Tx threads per row)
+  int ty = threadIdx.y;                    // 0..Ty-1
+
+  // coordinates of the element this thread will compute
+  int i = bx + tx;
+  int j = by + ty;
+
+  // cooperative load: each thread loads one or more elements including halo.
+  // Here we map a small rectangular load pattern to cover the tile+halo.
+  for (int y = ty; y < Ty + 2*r; y += blockDim.y) {
+    for (int x = tx; x < Tx + 2*r; x += blockDim.x) {
+      int gx = bx + x - r;
+      int gy = by + y - r;
+      float val = 0.0f;
+      if (gx >= 0 && gx < nx && gy >= 0 && gy < ny) {
+        val = in[ gy * pitch + gx ];        // coalesced when x loops align with tx
+      }
+      tile[y][x] = val;                     // store into shared memory
+    }
+  }
+  __syncthreads();
+
+  // compute only if inside global domain and not on halo
+  if (i >= 0 && i < nx && j >= 0 && j < ny) {
+    // avoid computing boundary if solver uses fixed BCs; here compute interior
+    if (i > 0 && i < nx-1 && j > 0 && j < ny-1) {
+      float center = tile[ty + r][tx + r];
+      float north  = tile[ty + r - 1][tx + r];
+      float south  = tile[ty + r + 1][tx + r];
+      float west   = tile[ty + r][tx + r - 1];
+      float east   = tile[ty + r][tx + r + 1];
+      float lap = north + south + west + east - 4.0f * center; // eq. (1)
+      out[ j * pitch + i ] = center + alpha * lap;
+    } else {
+      out[ j * pitch + i ] = in[ j * pitch + i ]; // boundary copy or BC handling
+    }
+  }
+}
