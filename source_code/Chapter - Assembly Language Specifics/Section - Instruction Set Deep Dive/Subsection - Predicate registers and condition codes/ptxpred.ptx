@@ -1,0 +1,20 @@
+.visible .entry kernel_pred_example(
+    .param .u64 _gptr
+)
+{
+    .reg .pred p1;            // per-thread predicate
+    .reg .u32 tid; .reg .s32 val;
+    .reg .u64 gptr;
+    .reg .b32 mask; .reg .b32 active_count;
+
+    ld.param.u64 gptr, [_gptr];      // load pointer parameter
+    mov.u32 tid, %tid.x;             // read threadIdx.x (special reg)
+    mov.s32 val, 42;                 // sample value to write
+
+    setp.lt.s32 p1, tid, 8;          // predicate true for tid < 8
+    @p1 st.global.s32 [gptr + 4*tid], val; // predicated global store
+
+    ballot.sync.aligned.b32 mask, p1; // collect predicates into mask
+    popc.b32 active_count, mask;      // count active lanes in warp
+    // active_count now equals popcount(mask) per Eq. (1)
+}
