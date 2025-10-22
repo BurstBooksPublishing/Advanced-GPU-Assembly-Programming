@@ -1,0 +1,47 @@
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry vadd(
+    .param .u64 ptr_a,      // pointer to float a[]
+    .param .u64 ptr_b,      // pointer to float b[]
+    .param .u64 ptr_c,      // pointer to float c[]
+    .param .u32 n           // length
+)
+{
+    .reg .pred  %p;                 // predicate for bounds
+    .reg .b32   %tid, %ctaid, %ntid, %idx, %nval;
+    .reg .b64   %base_a, %base_b, %base_c, %byte_off;
+    .reg .f32   %fa, %fb, %fc;
+
+    mov.u32    %tid, %tid.x;        // threadIdx.x
+    mov.u32    %ctaid, %ctaid.x;    // blockIdx.x
+    mov.u32    %ntid, %ntid.x;      // blockDim.x
+    mul.lo.u32 %idx, %ctaid, %ntid; // blockIdx*blockDim
+    add.u32    %idx, %idx, %tid;    // global idx
+    ld.param.u32 %nval, [n];        // load n
+    setp.ge.u32 %p, %idx, %nval;    // if idx >= n
+    @%p bra DONE;                   // skip work if out-of-range
+
+    // load base pointers
+    ld.param.u64 %base_a, [ptr_a];
+    ld.param.u64 %base_b, [ptr_b];
+    ld.param.u64 %base_c, [ptr_c];
+
+    // compute byte offset: idx * sizeof(float)
+    cvt.u64.u32  %byte_off, %idx;
+    mul.wide.u32 %byte_off, %idx, 4;
+
+    // load, add, store; use ld.global and st.global to show explicit memory ops
+    add.u64  %byte_off, %byte_off, 0;      // keep byte_off in 64-bit reg
+    add.u64  %base_a, %base_a, %byte_off;  // a + offset
+    ld.global.f32 %fa, [%base_a];          // load a[idx]
+    add.u64  %base_b, %base_b, %byte_off;  // b + offset
+    ld.global.f32 %fb, [%base_b];          // load b[idx]
+    add.f32 %fc, %fa, %fb;                 // compute
+    add.u64  %base_c, %base_c, %byte_off;  // c + offset
+    st.global.f32 [%base_c], %fc;          // store c[idx]
+
+DONE:
+    ret;
+}
