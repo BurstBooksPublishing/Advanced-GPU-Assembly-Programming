@@ -1,0 +1,32 @@
+extern "C" __global__
+void saxpy_unroll4(const float* __restrict__ x,
+                   const float* __restrict__ y,
+                   float* __restrict__ out,
+                   int n, float a) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;        // global thread id
+  int stride = gridDim.x * blockDim.x;                    // grid stride loop
+
+  // Main loop: unroll by 4 to expose ILP and amortize branch cost.
+  for (int i = tid; i + 3*stride < n; i += 4*stride) {
+    // four independent loads — good for scheduling and coalescing
+    float x0 = x[i];                // load 0
+    float y0 = y[i];
+    float x1 = x[i + stride];       // load 1 (staggered)
+    float y1 = y[i + stride];
+    float x2 = x[i + 2*stride];     // load 2
+    float y2 = y[i + 2*stride];
+    float x3 = x[i + 3*stride];     // load 3
+    float y3 = y[i + 3*stride];
+
+    // independent arithmetic chains; scheduler can pair/issue them in parallel
+    out[i]                 = a * x0 + y0; // chain 0
+    out[i + stride]        = a * x1 + y1; // chain 1
+    out[i + 2*stride]      = a * x2 + y2; // chain 2
+    out[i + 3*stride]      = a * x3 + y3; // chain 3
+  }
+
+  // Remainder loop
+  for (int i = tid + ((n - 1 - tid) / stride + 1) * stride; i < n; i += stride) {
+    out[i] = a * x[i] + y[i];
+  }
+}
