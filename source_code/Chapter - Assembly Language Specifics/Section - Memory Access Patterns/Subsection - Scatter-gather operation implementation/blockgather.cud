@@ -1,0 +1,68 @@
+extern "C" __global__
+void staged_gather(const int N, const int8_t* __restrict__ base, 
+                   const int* __restrict__ idx, float* __restrict__ out)
+{
+    extern __shared__ int s_bins[]; // dynamic shared: bin counts then offsets
+    const int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    const int lane = threadIdx.x & 31; // warp lane (assumes 32)
+    const int warp_id = threadIdx.x / 32;
+    const int BPERSEG = 128; // bytes per segment
+    const int elems_per_seg = BPERSEG / sizeof(float);
+
+    // Phase 1: each thread computes its segment id and contributes to block histogram
+    int seg = -1;
+    if (tid < N) {
+        seg = (idx[tid] * sizeof(float)) / BPERSEG; // segment id relative to base
+    }
+    // s_bins layout: [num_bins][bin_counts...][bin_offsets...]
+    int num_bins = blockDim.x / 32 + 1; // conservative upper bound
+    if (threadIdx.x == 0) s_bins[0] = num_bins;
+    __syncthreads();
+
+    // local per-warp histograms to reduce atomics
+    // we use a simple atomic add per-segment in shared mem
+    if (tid < N && seg >= 0) {
+        int slot = 1 + (seg % num_bins); // map segment into limited shared bins
+        atomicAdd(&s_bins[slot], 1); // count per bin
+    }
+    __syncthreads();
+
+    // compute offsets by prefix-scan in shared memory (single-threaded for clarity)
+    if (threadIdx.x == 0) {
+        int offset = 0;
+        for (int i = 1; i <= num_bins; ++i) {
+            int c = s_bins[i];
+            s_bins[num_bins + i] = offset; // store offset
+            offset += c;
+            s_bins[i] = 0; // reuse counts area as temporary
+        }
+    }
+    __syncthreads();
+
+    // Phase 2: populate a small shared staging buffer containing concatenated segments
+    // allocate staging as float array: size must be provided via kernel launch shared mem
+    float* s_staging = (float*)&s_bins[2 * num_bins + 1];
+    // compute position and write index into staging
+    if (tid < N && seg >= 0) {
+        int slot = 1 + (seg % num_bins);
+        int pos = atomicAdd(&s_bins[slot], 1);
+        int base_off = s_bins[num_bins + slot]; // offset for this slot
+        // store the thread index to later map back (store as int in float location via cast)
+        ((int*)s_staging)[base_off + pos] = tid;
+    }
+    __syncthreads();
+
+    // Now for each occupied slot, the block issues coalesced loads per segment
+    if (threadIdx.x < num_bins) {
+        int count = s_bins[1 + threadIdx.x];
+        int offset = s_bins[num_bins + 1 + threadIdx.x];
+        for (int i = 0; i < count; ++i) {
+            int tid_src = ((int*)s_staging)[offset + i];
+            int index = idx[tid_src];
+            // coalesced if many tids map to same segment; use __ldg for read-only cache
+            float val = __ldg(reinterpret_cast(base + index));
+            out[tid_src] = val; // write result for original requester
+        }
+    }
+    // done
+}
