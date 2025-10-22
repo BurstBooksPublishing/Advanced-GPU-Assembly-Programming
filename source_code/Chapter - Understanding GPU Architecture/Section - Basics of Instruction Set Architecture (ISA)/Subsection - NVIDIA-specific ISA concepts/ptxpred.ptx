@@ -1,0 +1,39 @@
+.version 6.4
+.target sm_70
+.address_size 64
+
+.visible .entry pred_store(
+    .param .u64 _in,   // input float* pointer
+    .param .u64 _out,  // output float* pointer
+    .param .u32 _N,    // length
+    .param .f32 _c     // constant to add
+)
+{
+    .reg .pred   %p<2>;
+    .reg .s32    %r<6>;
+    .reg .s64    %rd<6>;
+    .reg .f32    %f<2>;
+
+    ld.param.u64  %rd1, [_in];        // load pointer params
+    ld.param.u64  %rd2, [_out];
+    ld.param.u32  %r1, [_N];
+    ld.param.f32  %f1, [_c];
+
+    mov.u32  %r2, %tid.x;             // threadIdx.x
+    mov.u32  %r3, %ctaid.x;           // blockIdx.x
+    mov.u32  %r4, %ntid.x;            // blockDim.x
+    mad.lo.s32  %r5, %r3, %r4, %r2;   // global index = ctaId*ntid + tid
+
+    setp.lt.u32  %p1, %r5, %r1;       // predicate: idx < N
+    @!%p1 bra DONE;                    // if false, skip work
+
+    mul.wide.u32 %rd3, %r5, 4;        // byte offset = idx * sizeof(float)
+    add.u64 %rd4, %rd1, %rd3;         // in_addr = _in + offset
+    ld.global.f32  %f2, [%rd4];       // load
+    add.f32 %f2, %f2, %f1;            // add constant
+    add.u64 %rd5, %rd2, %rd3;         // out_addr = _out + offset
+    st.global.f32 [%rd5], %f2;        // store result
+
+DONE:
+    ret;
+}
