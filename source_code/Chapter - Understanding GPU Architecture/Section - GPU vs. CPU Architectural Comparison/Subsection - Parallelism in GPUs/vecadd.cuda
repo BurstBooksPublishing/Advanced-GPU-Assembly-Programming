@@ -1,0 +1,20 @@
+extern "C" __global__ void vecAdd(const float *A, const float *B, float *C, int N) {
+  // Compute global index using grid-stride loop to cover large N with few blocks.
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  int stride = gridDim.x * blockDim.x;
+  // Warp-local sum demonstration (each warp reduces its own partial sum).
+  unsigned mask = 0xFFFFFFFF; // full mask for active lanes
+  for (int i = gid; i < N; i += stride) {
+    float a = A[i]; // contiguous loads -> coalesced across warp
+    float b = B[i];
+    float x = a + b;
+    // Warp-level reduction: sum values across the warp and write lane 0's result.
+    for (int offset = warpSize/2; offset > 0; offset /= 2) {
+      float y = __shfl_down_sync(mask, x, offset); // shuffle within warp
+      x += y;
+    }
+    if ((threadIdx.x & (warpSize-1)) == 0) { // warp leader writes its partial result
+      C[i / warpSize] = x; // compacted output per-warp; further combine if needed
+    }
+  }
+}
