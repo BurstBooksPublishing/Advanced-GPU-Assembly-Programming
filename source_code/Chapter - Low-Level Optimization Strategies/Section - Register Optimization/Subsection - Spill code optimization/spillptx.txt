@@ -1,0 +1,36 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+.visible .entry spill_stage(
+    .param .u64 param_ptr /* unused in this demo */
+)
+{
+    .reg .u32 r0; .reg .u32 r1; .reg .u32 r2; .reg .u32 r3;
+    .reg .u32 tid; .reg .u32 lane;
+    .shared .align 4 .u32 s_buffer[1024];   // shared staging buffer (per-block)
+    // compute per-thread index
+    mov.u32 tid, %tid.x;                     // thread index in block
+    mov.u32 lane, %laneid;                   // lane within warp (PTX predicate)
+    // materialize some temporaries (these represent values that would be spilled)
+    mov.u32 r0, 0x11111111;                  // temp0
+    mov.u32 r1, 0x22222222;                  // temp1
+    mov.u32 r2, 0x33333333;                  // temp2
+    mov.u32 r3, 0x44444444;                  // temp3
+    // write temporaries into shared buffer in coalesced layout:
+    // index = tid * 4 + offset
+    mul.lo.u32 r0, tid, 4;
+    st.shared.u32 [s_buffer + r0*4 + 0], r1; // store temp0
+    st.shared.u32 [s_buffer + r0*4 + 4], r2; // store temp1
+    st.shared.u32 [s_buffer + r0*4 + 8], r3; // store temp2
+    st.shared.u32 [s_buffer + r0*4 + 12], r0; // store temp3 (reuse r0 as value)
+    bar.sync 0;                              // ensure all stores visible
+    // ... code that would otherwise force global spills ...
+    // restore temporaries from shared buffer
+    ld.shared.u32 r1, [s_buffer + r0*4 + 0];
+    ld.shared.u32 r2, [s_buffer + r0*4 + 4];
+    ld.shared.u32 r3, [s_buffer + r0*4 + 8];
+    ld.shared.u32 r0, [s_buffer + r0*4 + 12];
+    // use restored values in further computation (demo: write to global mem omitted)
+    ret;
+}
