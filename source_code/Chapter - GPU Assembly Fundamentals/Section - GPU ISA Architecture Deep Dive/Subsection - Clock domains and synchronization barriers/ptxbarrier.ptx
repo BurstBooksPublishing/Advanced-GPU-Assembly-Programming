@@ -1,0 +1,16 @@
+.visible .entry cta_barrier_example(
+    .param .u64 _arr   // pointer to global buffer
+)
+{
+    .reg .pred %p<2>;
+    .reg .u64  %rd<3>;
+    // load parameter
+    ld.param.u64    %rd1, [_arr];
+    // perform a device-scoped store (example)
+    st.global.u32   [%rd1], 0;    // store result to global memory
+    // ensure the store is visible to other CTAs/devices
+    membar.sys;                   // global memory ordering (device & system)
+    bar.sync 0;                   // CTA (block-level) barrier with id 0
+    // after barrier; all threads in CTA see ordered memory state
+    ret;
+}
