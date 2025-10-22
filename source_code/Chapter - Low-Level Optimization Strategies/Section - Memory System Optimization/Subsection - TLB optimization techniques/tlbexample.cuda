@@ -1,0 +1,31 @@
+#include <cuda_runtime.h>
+#include <sys/mman.h>    // madvise
+#include <unistd.h>
+#include <iostream>
+
+__global__ void tiled_access(float *A, size_t N, size_t tile_elems) {
+  // Each block works on a contiguous tile to minimize TLB entries.
+  size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t elems_per_block = tile_elems;
+  size_t base = blockIdx.x * elems_per_block;
+  for (size_t i = threadIdx.x; i < elems_per_block && base + i < N; i += blockDim.x) {
+    // contiguous accesses inside a tile -> fewer pages touched
+    A[base + i] = A[base + i] * 2.0f;
+  }
+}
+
+int main() {
+  size_t N = 1<<26;                      // large array
+  size_t bytes = N * sizeof(float);
+  float *A;
+  cudaMallocManaged(&A, bytes);          // Managed memory
+  madvise(A, bytes, MADV_HUGEPAGE);      // OS hint for huge pages (host side)
+  cudaMemAdvise(A, bytes, cudaMemAdviseSetPreferredLocation, 0); // prefer GPU (device 0)
+  cudaMemPrefetchAsync(A, bytes, 0, 0);  // prefetch to device 0 before kernel
+  dim3 block(256);
+  dim3 grid((N/1024 + block.x -1)/block.x);
+  tiled_access<<<grid,block>>>(A, N, 1024); // tile_elems = 1024
+  cudaDeviceSynchronize();
+  cudaFree(A);
+  return 0;
+}
