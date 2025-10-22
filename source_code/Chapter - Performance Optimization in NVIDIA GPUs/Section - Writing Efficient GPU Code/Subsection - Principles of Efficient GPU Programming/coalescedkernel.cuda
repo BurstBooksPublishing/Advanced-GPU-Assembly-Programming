@@ -1,0 +1,44 @@
+extern "C" __global__
+__launch_bounds__(128, 4) // hint: 128 threads/block, up to 4 blocks/SM for occupancy control
+void sum_reduce_padded(const float * __restrict__ g_src, float * __restrict__ g_dst, size_t N) {
+    // block/thread indices (CUDA names shown in comments)
+    const unsigned tid = threadIdx.x;            // \lstinline|threadIdx.x|
+    const unsigned lane = tid & 31;              // lane in warp
+    const unsigned wid  = tid >> 5;              // warp id within block
+    const unsigned gid  = blockIdx.x * blockDim.x + tid; // global linear thread id
+
+    // coalesced global load: each thread loads one element if in range
+    float val = 0.0f;
+    if (gid < N) {
+        // 32-bit loads naturally coalesce when consecutive threads read contiguous addresses
+        val = g_src[gid]; // coalesced 4-byte read when blockDim.x is multiple of 32
+    }
+
+    // warp-level reduction via shuffle (no shared memory, low latency, good for ML kernels)
+    // full mask for active threads in warp
+    unsigned full_mask = 0xFFFFFFFFu;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        float y = __shfl_down_sync(full_mask, val, offset);
+        val = val + y;
+    }
+
+    // warp 0 writes warp result to shared memory for block-level aggregation
+    __shared__ float sdata[128 + 32]; // pad by 32 to avoid bank conflict for 32-bank SMs
+    if (lane == 0) sdata[wid] = val;
+    __syncthreads();
+
+    // first warp finishes block-level reduction using shared staging (few elements)
+    float block_sum = 0.0f;
+    if (wid == 0) {
+        float tmp = (tid < (blockDim.x + 31) / 32) ? sdata[lane] : 0.0f;
+        // reduce within first warp (still small count)
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            tmp += __shfl_down_sync(full_mask, tmp, offset);
+        }
+        if (lane == 0) {
+            // write one result per block (coalesced if many blocks write contiguous positions)
+            g_dst[blockIdx.x] = tmp;
+        }
+    }
+    // implicit return
+}
