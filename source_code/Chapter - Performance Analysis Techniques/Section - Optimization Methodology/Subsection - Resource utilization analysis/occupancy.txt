@@ -1,0 +1,37 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <math.h>
+
+// Compute active blocks and occupancy given hardware and kernel resource usage.
+void compute_occupancy(uint32_t R_sm, uint32_t S_sm, uint32_t T_sm, // SM/CU totals
+                       uint32_t W, uint32_t B_hw_max,                // warp/wave and max blocks
+                       uint32_t R_t, uint32_t S_b, uint32_t T_b)     // kernel usage
+{
+    // ceilings per resource
+    uint32_t B_regs = (R_t==0) ? B_hw_max : (R_sm / (R_t * T_b));    // regs limit
+    uint32_t B_smem = (S_b==0) ? B_hw_max : (S_sm / S_b);            // shared mem/LDS limit
+    uint32_t B_threads = T_sm / T_b;                                // thread limit
+
+    // active blocks limited by all ceilings
+    uint32_t B_active = B_regs;
+    if (B_smem < B_active) B_active = B_smem;
+    if (B_threads < B_active) B_active = B_threads;
+    if (B_hw_max < B_active) B_active = B_hw_max;
+
+    uint32_t W_active = B_active * (T_b / W);                       // resident warps/waves
+    uint32_t W_max = T_sm / W;
+    double occupancy = (W_max==0) ? 0.0 : ((double)W_active / (double)W_max);
+
+    // print results (inline comments: map to profiling counters)
+    printf("Active blocks per SM: %u\n", B_active);
+    printf("Resident warps/waves: %u of %u\n", W_active, W_max);
+    printf("Occupancy: %.2f%%\n", occupancy * 100.0);
+}
+
+int main(void)
+{
+    // Example: generic NVIDIA-like SM with 65536 32-bit registers, 64KB smem, 2048 threads max.
+    compute_occupancy(65536, 64*1024, 2048, 32, 16,  // R_sm,S_sm,T_sm,W,B_hw_max
+                      32,   0,           256);       // R_t,S_b,T_b (regs/thread, smem/block, threads/block)
+    return 0;
+}
