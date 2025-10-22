@@ -1,0 +1,40 @@
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry tiled_kernel(
+    .param .u64 A_ptr, .param .u64 B_ptr, .param .u64 C_ptr,
+    .param .u32 M, .param .u32 N, .param .u32 K)
+{
+    .reg .pred p;
+    .reg .b32 r0, tx, ty;
+    .reg .b64 A, B, C, idxA, idxB, idxC;
+    .shared .align 16 .b8 smem_A[4096];   // tile buffer A
+    .shared .align 16 .b8 smem_B[4096];   // tile buffer B
+
+    // compute thread indices
+    mov.u32 tx, %tid.x; mov.u32 ty, %tid.y;
+    ld.param.u64 A, [A_ptr]; ld.param.u64 B, [B_ptr]; ld.param.u64 C, [C_ptr];
+
+    // setup pointers and loop bounds omitted for brevity
+    // Issue async copy of tile0 for A and B into shared memory
+    // cp.async copies 128 bytes at a time; here we show one element for clarity.
+    // Each thread issues its portion of the tile.
+    cp.async.ca.shared.global [smem_A + tx*4], [A + idxA], 4; // async load A tile
+    cp.async.ca.shared.global [smem_B + tx*4], [B + idxB], 4; // async load B tile
+
+    cp.async.commit_group;               // commit the outstanding cp.async ops
+    // perform compute on previously-loaded tile (or prologue compute if first iter)
+    // For first tile, do minimal compute or zero-guard; subsequent iter overlaps.
+    cp.async.wait_group 1;               // wait for at least 1 committed group availability
+
+    // load from shared and do inner-product; these are short-latency shared loads
+    ld.shared.u32 r0, [smem_A + tx*4];   // load from shared mem
+    // compute (example: increment)
+    add.u32 r0, r0, 1;
+    st.shared.u32 [smem_B + tx*4], r0;   // write-back into shared for reduction
+
+    // finalize: store results back to global memory
+    st.global.u32 [C + idxC], r0;
+    ret;
+}
