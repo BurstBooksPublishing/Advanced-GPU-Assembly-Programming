@@ -1,0 +1,57 @@
+#include <cuda_runtime.h>
+#include <stdint.h>
+#include <stdio.h>
+
+constexpr int WORDS_PER_LINE = 32; // 128B / 4B
+struct LineHeader { uint32_t flags; uint32_t size; }; // simple header
+
+__global__ void compress_lines(const uint32_t* __restrict__ in, uint8_t* __restrict__ out,
+                               LineHeader* headers, int n_lines) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n_lines) return;
+
+  // load 128B line
+  const uint32_t* src = in + idx * WORDS_PER_LINE;
+  uint32_t vals[WORDS_PER_LINE];
+  #pragma unroll
+  for (int i = 0; i < WORDS_PER_LINE; ++i)
+    vals[i] = src[i];
+
+  uint32_t base = vals[0];
+  bool fits16 = true;
+  #pragma unroll
+  for (int i = 1; i < WORDS_PER_LINE; ++i) {
+    int32_t delta = (int32_t)vals[i] - (int32_t)base;
+    if (delta < -32768 || delta > 32767) { fits16 = false; break; }
+  }
+
+  uint8_t* dst = out + idx * (128 + sizeof(LineHeader)); // safe per-line slot
+  LineHeader h;
+  if (fits16) {
+    // layout: [flags=1][size][base (4B)][31*int16 deltas]
+    h.flags = 1;
+    h.size = 4 + 2 * (WORDS_PER_LINE - 1) + sizeof(LineHeader);
+    *(LineHeader*)dst = h;
+    uint8_t* p = dst + sizeof(LineHeader);
+    *(uint32_t*)p = base; p += 4;
+    #pragma unroll
+    for (int i = 1; i < WORDS_PER_LINE; ++i) {
+      int16_t d = (int16_t)((int32_t)vals[i] - (int32_t)base);
+      *(int16_t*)p = d; p += 2;
+    }
+  } else {
+    // store uncompressed: header + raw 128B
+    h.flags = 0;
+    h.size = 128 + sizeof(LineHeader);
+    *(LineHeader*)dst = h;
+    uint8_t* p = dst + sizeof(LineHeader);
+    #pragma unroll
+    for (int i = 0; i < WORDS_PER_LINE; ++i) {
+      *(uint32_t*)p = vals[i];
+      p += 4;
+    }
+  }
+  headers[idx] = h; // record metadata for consumer
+}
+
+// Host-side usage omitted for brevity; this kernel demonstrates algorithmic structure.
