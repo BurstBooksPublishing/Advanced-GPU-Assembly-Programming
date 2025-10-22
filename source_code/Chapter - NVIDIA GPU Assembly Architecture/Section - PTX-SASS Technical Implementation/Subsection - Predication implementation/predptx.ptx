@@ -1,0 +1,45 @@
+.version 6.4
+.target sm_70
+.address_size 64
+
+.visible .entry pred_example(
+    .param .u64 _arg_in,      // pointer to input array
+    .param .u64 _arg_out,     // pointer to output array
+    .param .u32 _arg_n,       // element count
+    .param .u32 _arg_thr      // threshold
+)
+{
+    .reg .pred %p<2>;         // predicate registers p0,p1
+    .reg .u32  %r<6>;
+    .reg .u64  %rd<8>;
+
+    // load kernel params
+    ld.param.u64  %rd1, [_arg_in];    // %rd1 = base_in
+    ld.param.u64  %rd2, [_arg_out];   // %rd2 = base_out
+    ld.param.u32  %r4,  [_arg_n];     // %r4 = n
+    ld.param.u32  %r5,  [_arg_thr];   // %r5 = threshold
+
+    // compute global idx: idx = blockIdx.x * blockDim.x + threadIdx.x
+    mov.u32       %r1, %tid.x;        // threadIdx.x
+    mov.u32       %r2, %ctaid.x;      // blockIdx.x
+    mul.wide.u32  %rd3, %r2, %ntid.x; // %rd3 = blockIdx.x * blockDim.x (64-bit)
+    cvt.u64.u32   %rd4, %r1;          // zero-extend threadIdx
+    add.u64       %rd5, %rd3, %rd4;   // %rd5 = idx (64-bit)
+
+    // bounds check, guard by predicate
+    setp.ge.u64   %p0, %rd5, %r4;     // p0 = idx >= n
+    @%p0          bra DONE;           // if out-of-range, return (warp still issues)
+
+    // load input value and compare with threshold
+    mul.wide.u32  %rd6, %rd5, 4;      // byte offset = idx * 4
+    add.u64       %rd7, %rd1, %rd6;   // in_addr
+    ld.global.u32 %r0, [%rd7];        // value = in[idx]
+
+    setp.gt.u32   %p1, %r0, %r5;      // p1 = value > threshold
+    add.u64       %rd0, %rd2, %rd6;   // out_addr
+
+    @%p1 st.global.u32 [%rd0], %r0;   // store only on lanes where p1==true
+
+DONE:
+    ret;
+}
