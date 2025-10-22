@@ -1,0 +1,23 @@
+__global__ void handle_divergence(int *data, int N) {
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int lane = threadIdx.x & 31;                // lane within warp
+  int warp_base = tid - lane;                 // warp base index
+
+  bool cond = (tid < N) && (data[tid] & 1);   // divergent condition
+  unsigned mask = __ballot_sync(0xFFFFFFFFu, cond); // mask of lanes true
+
+  while (mask) {
+    int leader = __ffs(mask) - 1;             // first set bit (0..31)
+    int active_tid = warp_base + leader;      // representative thread
+    int result = 0;
+    if (lane == leader && active_tid < N) {   // only leader executes heavy work
+      int v = data[active_tid];
+      // do expensive, branchy computation here
+      result = v * 3 + (v >> 2);              // placeholder compute
+      data[active_tid] = result;              // write back leader's result
+    }
+    // optionally broadcast leader result to all lanes that matched cond
+    // mask update: clear leader bit
+    mask &= ~(1u << leader);
+  }
+}
