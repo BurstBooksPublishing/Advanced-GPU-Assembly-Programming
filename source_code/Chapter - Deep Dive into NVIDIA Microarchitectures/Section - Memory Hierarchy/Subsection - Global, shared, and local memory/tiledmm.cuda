@@ -1,0 +1,44 @@
+#define TILE 32
+// Kernel assumes N is multiple of TILE for simplicity; boundary checks included.
+extern "C"
+__global__ void matmul_tiled(const float* __restrict__ A, const float* __restrict__ B,
+                             float* C, int N) {
+  // Block coordinates
+  int bx = blockIdx.x, by = blockIdx.y;
+  int tx = threadIdx.x, ty = threadIdx.y;
+
+  // Compute row/col of C element this thread will accumulate
+  int row = by * TILE + ty;
+  int col = bx * TILE + tx;
+
+  // Shared memory tiles for A and B (bank-friendly layout)
+  __shared__ float sA[TILE][TILE];
+  __shared__ float sB[TILE][TILE];
+
+  float acc = 0.0f; // accumulator (kept in register)
+
+  // Loop over tiles of A and B along K dimension
+  for (int m = 0; m < N; m += TILE) {
+    // Load one element per thread from global to shared (coalesced)
+    int aIndex = row * N + (m + tx);            // contiguous across tx -> coalesced
+    int bIndex = (m + ty) * N + col;            // contiguous across ty -> coalesced when transposed load preference is applied
+
+    // Boundary-safe loads; compiler keeps these in registers (minimize spills)
+    sA[ty][tx] = (row < N && (m + tx) < N) ? A[aIndex] : 0.0f;
+    sB[ty][tx] = ((m + ty) < N && col < N) ? B[bIndex] : 0.0f;
+
+    __syncthreads(); // ensure all loads are visible to the block
+
+    // Compute partial product for this tile (inner loop stays in registers)
+    #pragma unroll
+    for (int k = 0; k < TILE; ++k) {
+      acc += sA[ty][k] * sB[k][tx];
+    }
+    __syncthreads(); // wait before next tile overwrite
+  }
+
+  // Write result back to global memory (coalesced across tx)
+  if (row < N && col < N) {
+    C[row * N + col] = acc;
+  }
+}
