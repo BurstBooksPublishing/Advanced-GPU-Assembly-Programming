@@ -1,0 +1,46 @@
+.version 7.0
+.target sm_80
+.address_size 64
+
+.visible .entry gemv_ptx(
+    .param .u64 A_ptr,      // matrix base
+    .param .u64 x_ptr,      // vector base
+    .param .u64 y_ptr,      // output base
+    .param .u32 N
+)
+{
+    .reg .pred p;
+    .reg .f32 f0, f1, f2;
+    .reg .b64 rA, rx, ry;
+    .reg .u32 idx, n;
+    ld.param.u64 rA, [A_ptr];   // load pointers
+    ld.param.u64 rx, [x_ptr];
+    ld.param.u64 ry, [y_ptr];
+    ld.param.u32 n, [N];
+
+    mov.u32 idx, %tid.x;        // thread index
+    setp.ge.u32 p, idx, n;
+    @p bra DONE;
+
+    // load x element and y accumulator
+    mul.lo.u32 %r1, idx, 4;     // byte offset (kept minimal regs)
+    add.u64 %rd2, rx, %r1;
+    ld.global.f32 f0, [%rd2];   // x[idx]
+    // initialize accumulator in f1
+    mov.f32 f1, 0f00000000;     // 0.0
+
+LOOP:
+    // load A[row, k] and x[k], do fused multiply-add
+    ld.global.f32 f2, [rA];     // A_elem
+    // compiler emits FFMA in SASS for this fmaf form
+    fma.rn.f32 f1, f2, f0, f1;  // f1 += f2 * f0  (encourages FFMA)
+    add.u64 rA, rA, 4;         // advance pointer (minimal reg use)
+    setp.lt.u64 p, rA, /*end*/; // loop condition
+    @p bra LOOP;
+
+    // store result
+    st.global.f32 [ry], f1;
+
+DONE:
+    ret;
+}
