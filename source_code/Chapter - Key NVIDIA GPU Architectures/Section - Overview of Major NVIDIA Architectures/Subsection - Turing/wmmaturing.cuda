@@ -1,0 +1,48 @@
+#include <cuda_runtime.h>
+#include <mma.h>
+#include <cstdio>
+#include <cstdlib>
+using namespace nvcuda;
+
+#define CHECK(call) { cudaError_t e = call; if(e!=cudaSuccess){ \
+  printf("CUDA error: %s\n", cudaGetErrorString(e)); exit(1);} }
+
+__global__ void wmma_gemm_kernel(half *A, half *B, float *C) {
+  // Each block computes one 16×16×16 WMMA tile
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> a_frag;
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> b_frag;
+  wmma::fragment<wmma::accumulator, 16, 16, 16, float> c_frag;
+
+  wmma::fill_fragment(c_frag, 0.0f);
+  wmma::load_matrix_sync(a_frag, A + blockIdx.x * 256, 16);
+  wmma::load_matrix_sync(b_frag, B + blockIdx.x * 256, 16);
+
+  wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+  wmma::store_matrix_sync(C + blockIdx.x * 256, c_frag, 16, wmma::mem_row_major);
+}
+
+int main() {
+  const int tiles = 4;  // number of tiles
+  const int elems_h = 16 * 16 * tiles;
+  const int elems_f = 16 * 16 * tiles;
+  const int bytes_h = elems_h * sizeof(half);
+  const int bytes_f = elems_f * sizeof(float);
+
+  half *dA, *dB;
+  float *dC;
+  CHECK(cudaMalloc(&dA, bytes_h));
+  CHECK(cudaMalloc(&dB, bytes_h));
+  CHECK(cudaMalloc(&dC, bytes_f));
+
+  // (optional) initialize inputs
+  // ...
+
+  // One block per tile, 32 threads = one warp per WMMA operation
+  wmma_gemm_kernel<<<tiles, 32>>>(dA, dB, dC);
+  CHECK(cudaDeviceSynchronize());
+
+  CHECK(cudaFree(dA));
+  CHECK(cudaFree(dB));
+  CHECK(cudaFree(dC));
+  return 0;
+}
