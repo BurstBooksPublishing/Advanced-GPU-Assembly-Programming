@@ -1,0 +1,19 @@
+#include <cuda_runtime.h>
+#include <cstdio>
+
+// kernel: sample via texture object (hardware TMU path)
+__global__ void texFetchKernel(cudaTextureObject_t texObj, float* out, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) return;
+  float u = (idx + 0.5f) / N;               // normalized coordinate
+  out[idx] = tex1Dfetch<float>(texObj, idx); // texture cache path (1D fetch)
+}
+
+// kernel: raw global load path (coalesced)
+__global__ void globalLoadKernel(const float* data, float* out, int N) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= N) return;
+  out[idx] = data[idx];                     // L1/L2 path, no TMU
+}
+
+// Host: allocate, bind texture object, launch kernels (error checks omitted).
