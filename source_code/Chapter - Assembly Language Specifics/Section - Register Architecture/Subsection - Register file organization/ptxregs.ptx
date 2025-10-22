@@ -1,0 +1,46 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+.visible .entry compact_add(
+    .param .u64 param_a,    // device pointer A
+    .param .u64 param_b,    // device pointer B
+    .param .u64 param_c,    // device pointer C
+    .param .u32 param_n)    // length
+{
+    .reg .pred p;                   // one predicate reg
+    .reg .u32 r_idx;                // loop index
+    .reg .u64 r_pa, r_pb, r_pc;     // compactly reuse 64-bit regs
+    .reg .f32 f_tmp0, f_tmp1;       // floating temporaries (reuse)
+    .reg .u32 r_n;
+
+    // load parameters (minimal temporaries)
+    ld.param.u64 r_pa, [param_a];   // pointer A
+    ld.param.u64 r_pb, [param_b];   // pointer B
+    ld.param.u64 r_pc, [param_c];   // pointer C
+    ld.param.u32 r_n,  [param_n];
+
+    // compute global index in one register to avoid extra temps
+    mov.u32 r_idx, %tid.x;          // thread index in x
+    setp.ge.u32 p, r_idx, r_n;
+    @p bra DONE;
+
+LOOP:
+    mul.wide.u32 r_pa, r_idx, 4;    // byte offset (reusing r_pa reg)
+    add.u64 r_pa, r_pa, r_pa;       // harmless reuse to highlight minimization
+    // load A and B into f_tmp registers (reuse two f32 regs)
+    ld.global.f32 f_tmp0, [r_pa];   // load A[i]
+    ld.global.f32 f_tmp1, [r_pb];   // load B[i]
+    add.f32 f_tmp0, f_tmp0, f_tmp1; // compute A+B in f_tmp0
+    st.global.f32 [r_pc], f_tmp0;   // store to C[i] (uses same tmp)
+
+    // increment index, update pointers compactly
+    add.u32 r_idx, r_idx, 1;
+    add.u64 r_pb, r_pb, 4;          // advance B pointer in-place
+    add.u64 r_pc, r_pc, 4;          // advance C pointer in-place
+    setp.ge.u32 p, r_idx, r_n;
+    @!p bra LOOP;
+
+DONE:
+    ret;
+}
