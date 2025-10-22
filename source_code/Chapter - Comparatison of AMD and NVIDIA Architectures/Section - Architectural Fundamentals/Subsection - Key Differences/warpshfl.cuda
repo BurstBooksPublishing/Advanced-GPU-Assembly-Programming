@@ -1,0 +1,14 @@
+extern "C" __global__ void warp_reduce_sum(const float *in, float *out, int N) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  float val = (gid < N) ? in[gid] : 0.0f; // load per-thread value
+  unsigned mask = 0xffffffff; // active lanes mask
+
+  // warp-level reduction using shuffle (works across 32 lanes)
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    float other = __shfl_down_sync(mask, val, offset); // lane shuffle
+    val += other; // addition will become a sequence of SASS SHFL + FADD
+  }
+
+  // write result from lane 0 of each warp
+  if ((threadIdx.x & 31) == 0) out[gid / 32] = val;
+}
