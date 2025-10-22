@@ -1,0 +1,31 @@
+extern "C" __global__ void group_reduce(const float *in, float *out, int N) {
+  // thread/global indices
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int lane = threadIdx.x & 31;                 // lane ID within warp (G=32)
+  int warpId = threadIdx.x >> 5;               // warp index within block
+
+  float val = (tid < N) ? in[tid] : 0.0f;      // per-thread input
+
+  // Intra-warp reduction using warp shuffles (no shared mem, low latency).
+  // __shfl_down_sync performs register-to-register lane shuffling.
+  unsigned fullMask = 0xffffffffu;             // active lane mask
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    float y = __shfl_down_sync(fullMask, val, offset); // move value from higher lane
+    val += y;                                       // accumulate in registers
+  }
+
+  // Warp leader writes partial sum to shared memory for block-level reduce.
+  __shared__ float warpPartials[32];            // supports up to 32 warps per block
+  if (lane == 0) warpPartials[warpId] = val;
+  __syncthreads();
+
+  // Final reduction among warp leaders using a single warp.
+  if (warpId == 0) {
+    float sum = (threadIdx.x < (blockDim.x >> 5)) ? warpPartials[lane] : 0.0f;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      float y = __shfl_down_sync(fullMask, sum, offset);
+      sum += y;
+    }
+    if (lane == 0) out[blockIdx.x] = sum;       // one write per block
+  }
+}
