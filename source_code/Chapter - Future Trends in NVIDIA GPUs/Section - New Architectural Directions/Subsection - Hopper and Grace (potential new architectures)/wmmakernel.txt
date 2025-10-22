@@ -1,0 +1,41 @@
+#include <cuda_runtime.h>
+#include <mma.h>
+#include <cstdio>
+using namespace nvcuda; // WMMA namespace
+
+// Tile sizes: 16x16 is common for many tensor cores.
+// This sample multiplies A(MxK) * B(KxN) = C(MxN) with M,N,K multiples of 16.
+__global__ void wmmaGEMM(const half* A, const half* B, float* C, int M, int N, int K) {
+  // Compute tile indices (each warp computes a 16x16 tile)
+  int tile_m = (blockIdx.y * blockDim.y + threadIdx.y);
+  int tile_n = (blockIdx.x * blockDim.x + threadIdx.x);
+
+  int row = tile_m * 16;
+  int col = tile_n * 16;
+
+  if (row >= M || col >= N) return;
+
+  wmma::fragment<wmma::matrix_a, 16, 16, 16, half, wmma::row_major> aFrag;
+  wmma::fragment<wmma::matrix_b, 16, 16, 16, half, wmma::col_major> bFrag;
+  wmma::fragment<wmma::accumulator, 16, 16, 16, float> accFrag;
+  wmma::fill_fragment(accFrag, 0.0f);
+
+  for (int k = 0; k < K; k += 16) {
+    // Load tiles from global mem into fragments
+    const half* aTile = A + (row * K) + k;
+    const half* bTile = B + (k * N) + col;
+    wmma::load_matrix_sync(aFrag, aTile, K); // K is leading dim for A
+    wmma::load_matrix_sync(bFrag, bTile, N); // N is leading dim for B
+    wmma::mma_sync(accFrag, aFrag, bFrag, accFrag); // tensor core op
+  }
+
+  // Store accumulator fragment back to global memory
+  float out[16 * 16];
+  wmma::store_matrix_sync(out, accFrag, 16, wmma::mem_row_major);
+  for (int i = 0; i < 16; ++i) {
+    int dst = (row + i) * N + col;
+    for (int j = 0; j < 16; ++j)
+      C[dst + j] = out[i * 16 + j];
+  }
+}
+// Host-side: allocate, copy, launch omitted for brevity.
