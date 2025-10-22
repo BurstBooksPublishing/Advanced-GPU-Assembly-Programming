@@ -1,0 +1,43 @@
+#include <cuda_runtime.h>
+#include <stdio.h>
+
+__global__ void child_kernel(float *data, int start, int n) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n)
+    data[start + idx] += 1.0f;  // simple per-thread increment
+}
+
+__global__ void parent_kernel(float *data, int N) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  // Each parent thread may conditionally launch a child grid
+  if (gid % 1024 == 0 && gid < N) {
+    int batch = min(256, N - gid);               // bounded launch batch
+    int threads = 128;
+    int blocks  = (batch + threads - 1) / threads;
+
+    // Device-side kernel launch (Kepler+ supports dynamic parallelism)
+    child_kernel<<<blocks, threads>>>(data, gid, batch);
+
+    // No device-host synchronization; parent continues execution
+  }
+}
+
+int main() {
+  const int N = 1 << 20;
+  float *d_data;
+  cudaMalloc(&d_data, N * sizeof(float));
+  cudaMemset(d_data, 0, N * sizeof(float));
+
+  dim3 block(256);
+  dim3 grid((N + block.x - 1) / block.x);
+
+  parent_kernel<<<grid, block>>>(d_data, N);
+  cudaDeviceSynchronize();
+
+  float val0;
+  cudaMemcpy(&val0, d_data, sizeof(float), cudaMemcpyDeviceToHost);
+  printf("First element: %f\n", val0);
+
+  cudaFree(d_data);
+  return 0;
+}
