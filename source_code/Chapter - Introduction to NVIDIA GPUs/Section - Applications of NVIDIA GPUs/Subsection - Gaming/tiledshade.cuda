@@ -1,0 +1,35 @@
+extern "C" __global__
+void tiled_shade(const float4* __restrict__ normals,    // per-pixel normals
+                 const float4* __restrict__ albedo,     // per-pixel albedo
+                 const float3  lightDir,                // single directional light
+                 float4* __restrict__ outColor,         // framebuffer
+                 int width, int height)
+{
+  // 16x16 tile per block for cache-friendly accesses
+  constexpr int TILE = 16;
+  __shared__ float4 s_albedo[TILE][TILE]; // shared tile of albedo
+  int tx = threadIdx.x, ty = threadIdx.y;
+  int x = blockIdx.x * TILE + tx, y = blockIdx.y * TILE + ty;
+  int idx = y * width + x;
+
+  // Load into shared memory with boundary checks (coalesced loads in global)
+  if (x < width && y < height) {
+    s_albedo[ty][tx] = albedo[idx]; // shared copy reduces TMU thrashing
+  } else {
+    s_albedo[ty][tx] = make_float4(0.f);
+  }
+  __syncthreads(); // ensure shared tile is ready
+
+  // Compute simple Lambertian shading using normal and shared albedo
+  if (x < width && y < height) {
+    float3 n = make_float3(normals[idx]);
+    // normalize (cheap approx); in production use pre-normalized buffers
+    float invLen = rsqrtf(n.x*n.x + n.y*n.y + n.z*n.z + 1e-8f);
+    n.x *= invLen; n.y *= invLen; n.z *= invLen;
+    float ndotl = fmaxf(0.0f, n.x*lightDir.x + n.y*lightDir.y + n.z*lightDir.z);
+    float4 alb = s_albedo[ty][tx]; // read from shared
+    float3 shaded = make_float3(alb.x, alb.y, alb.z) * ndotl;
+    outColor[idx] = make_float4(shaded, 1.0f); // coalesced store
+  }
+  // no further sync needed; kernel maps per-pixel work to threads.
+}
