@@ -1,0 +1,18 @@
+__device__ unsigned int warp_reduce_sum(unsigned int val) {
+  // Assume mask = 0xffffffff for active lanes in this warp
+  unsigned int mask = 0xffffffffu;
+  // 32-lane warp: use __shfl_down_sync with offsets 1,2,4,8,16
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    unsigned int other = __shfl_down_sync(mask, val, offset);
+    val += other; // lane-local accumulation
+  }
+  // lane 0 of the warp now holds the reduction result
+  return val;
+}
+__global__ void kernel_reduce(unsigned int *data, unsigned int *out, int N) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  unsigned int v = (gid < N) ? data[gid] : 0u;
+  unsigned int sum = warp_reduce_sum(v);
+  // write by lane 0 of each warp to global memory (publisher must coordinate)
+  if ((threadIdx.x & 31) == 0) out[blockIdx.x * (blockDim.x/32) + (threadIdx.x>>5)] = sum;
+}
