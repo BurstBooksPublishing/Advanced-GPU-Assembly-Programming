@@ -1,0 +1,15 @@
+# parse32.py -- parse a hypothetical 32-bit GPU instruction
+def extract_fields(word):
+    # word: 32-bit integer instruction
+    # field layout (LSB..MSB): opcode[0:7], dest[8:15], src0[16:23], src1[24:31]
+    opcode =  word & 0xFF                    # 8-bit opcode
+    dest   = (word >> 8) & 0xFF               # 8-bit dest register id
+    src0   = (word >> 16) & 0xFF              # 8-bit source 0 register id
+    src1   = (word >> 24) & 0xFF              # 8-bit source 1 register id
+    return {'opcode': opcode, 'dest': dest, 'src0': src0, 'src1': src1}
+
+if __name__ == '__main__':
+    instr = 0x4A_12_03_FF  # example 32-bit word (hex with underscores for readability)
+    fields = extract_fields(instr)
+    # print fields (used by disassembler or verifier)
+    print(fields)  # {'opcode': 255, 'dest': 3, 'src0': 18, 'src1': 74}
