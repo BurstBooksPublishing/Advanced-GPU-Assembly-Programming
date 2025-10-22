@@ -1,0 +1,12 @@
+extern "C" __global__ void warp_reduce_sum(float *data, float *out, int N) {
+  unsigned int gid = blockIdx.x * blockDim.x + threadIdx.x;      // global index
+  float val = (gid < N) ? data[gid] : 0.0f;                     // load element
+  unsigned int mask = 0xFFFFFFFFu;                              // active mask (CUDA 9+)
+  // warp-level tree reduction using XOR shuffle. // 32-thread warp assumed.
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    float other = __shfl_down_sync(mask, val, offset);          // shuffle down
+    val += other;                                               // accumulate
+  }
+  // write one value per warp leader
+  if ((threadIdx.x & 31) == 0) out[blockIdx.x * (blockDim.x / 32) + (threadIdx.x >> 5)] = val;
+}
