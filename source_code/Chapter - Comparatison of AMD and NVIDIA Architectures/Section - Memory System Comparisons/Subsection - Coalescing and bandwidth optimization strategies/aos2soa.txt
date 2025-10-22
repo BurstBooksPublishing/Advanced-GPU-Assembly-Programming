@@ -1,0 +1,23 @@
+struct alignas(16) Vec4 { float x,y,z,w; };   // 16-byte aligned structure
+
+// src: AoS array of Vec4; x_out..w_out: SoA outputs
+extern "C" __global__
+void aos_to_soa(const Vec4* __restrict__ src,
+                float* __restrict__ x_out,
+                float* __restrict__ y_out,
+                float* __restrict__ z_out,
+                float* __restrict__ w_out,
+                int N)
+{
+  const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const int stride = gridDim.x * blockDim.x;
+
+  // Vectorized loading: each thread loads one Vec4 (16B) aligned to 16 bytes.
+  for (int i = tid; i < N; i += stride) {
+    Vec4 v = src[i];                  // coalesced when src is aligned and consecutive
+    x_out[i] = v.x;                   // independent scalar writes, also coalesced
+    y_out[i] = v.y;
+    z_out[i] = v.z;
+    w_out[i] = v.w;
+  }
+}
