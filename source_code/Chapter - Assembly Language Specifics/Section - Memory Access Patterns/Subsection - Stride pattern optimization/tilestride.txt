@@ -1,0 +1,36 @@
+extern "C" __global__
+void tile_stride_copy(const float * __restrict__ src, float * __restrict__ dst,
+                      int N, int stride) {
+  // Block processes TILE_X x TILE_Y elements.
+  const int TILE_X = 32; const int TILE_Y = 8; // 256 threads per block
+  __shared__ float tile[TILE_Y][TILE_X + 1]; // +1 avoids bank conflicts
+
+  int tx = threadIdx.x;                // 0..blockDim.x-1
+  int bx = blockIdx.x * TILE_X;       // tile origin in X (fast dimension)
+  int by = blockIdx.y * TILE_Y;       // tile origin in Y (logical groups)
+
+  // Each thread loads one element from a coalesced source region.
+  int local_x = tx % TILE_X;
+  int local_y = tx / TILE_X;
+  int gx = bx + local_x;
+  int gy = by + local_y;
+
+  // Bounds-check and coalesced read (reads contiguous X across threads).
+  if (gx < N && gy < N) {
+    tile[local_y][local_x] = src[gy * N + gx]; // coalesced across threads
+  } else {
+    tile[local_y][local_x] = 0.0f;
+  }
+  __syncthreads();
+
+  // Now write to destination with stride between consecutive thread targets.
+  // Compute logical thread id within warp/block to index strided positions.
+  int thread_global = (blockIdx.x * blockDim.x) + tx;
+  long dst_index = (long)thread_global * stride; // may be sparse
+
+  // Each thread reads its value from shared tile and writes to strided dst.
+  float val = tile[local_y][local_x];
+  if (dst_index < (long)N * (long)N) {
+    dst[dst_index] = val; // write is strided but global loads were coalesced
+  }
+}
