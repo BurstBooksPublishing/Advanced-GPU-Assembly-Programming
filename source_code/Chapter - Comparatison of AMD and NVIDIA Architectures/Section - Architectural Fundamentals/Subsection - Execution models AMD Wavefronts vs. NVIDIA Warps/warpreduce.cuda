@@ -1,0 +1,13 @@
+extern "C" __global__ void warp_sum_kernel(const float *in, float *out) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  float val = in[gid];                 // per-thread input
+  // warp lane mask for active threads in this warp
+  unsigned mask = __activemask();     // CUDA intrinsic, warp-level mask
+  // warp-wide reduction using shuffle down (sync with mask).
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    float tmp = __shfl_down_sync(mask, val, offset); // lane shuffle
+    val += tmp;                  // sum partials
+  }
+  // write result from lane 0 of each warp
+  if ((threadIdx.x & 31) == 0) out[gid >> 5] = val; // one write per warp
+}
