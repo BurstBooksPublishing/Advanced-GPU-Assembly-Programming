@@ -1,0 +1,40 @@
+#include <hip/hip_runtime.h>
+
+__global__ void saxpy_kernel(float a, float* x, float* y, int n) {
+  int gid = blockDim.x * blockIdx.x + threadIdx.x; // lane id
+  if (gid < n) y[gid] = a * x[gid] + y[gid];        // simple compute
+}
+
+int main() {
+  const int N = 1<<20;
+  float *h_x, *h_y;         // host buffers (pinned)
+  float *d_x, *d_y;         // device buffers
+  hipStream_t stream;
+  hipHostMalloc(&h_x, N*sizeof(float)); // pinned host alloc
+  hipHostMalloc(&h_y, N*sizeof(float));
+  hipMalloc(&d_x, N*sizeof(float));     // device alloc
+  hipMalloc(&d_y, N*sizeof(float));
+  hipStreamCreate(&stream);             // create async stream
+
+  // Prepare host data (overlappable with other CPU work)
+  for (int i=0; i<N; ++i) { h_x[i] = 1.0f; h_y[i] = 2.0f; }
+
+  // Async host->device copy (overlaps with GPU work if used carefully)
+  hipMemcpyAsync(d_x, h_x, N*sizeof(float), hipMemcpyHostToDevice, stream);
+  hipMemcpyAsync(d_y, h_y, N*sizeof(float), hipMemcpyHostToDevice, stream);
+
+  // Launch kernel on same stream to ensure ordering without blocking host
+  int bs = 256; int grids = (N+bs-1)/bs;
+  hipLaunchKernelGGL(saxpy_kernel, dim3(grids), dim3(bs), 0, stream, 2.0f, d_x, d_y, N);
+
+  // Async device->host copy of results
+  hipMemcpyAsync(h_y, d_y, N*sizeof(float), hipMemcpyDeviceToHost, stream);
+
+  hipStreamSynchronize(stream);         // wait for all async ops to finish
+
+  // Cleanup
+  hipFree(d_x); hipFree(d_y);
+  hipHostFree(h_x); hipHostFree(h_y);
+  hipStreamDestroy(stream);
+  return 0;
+}
