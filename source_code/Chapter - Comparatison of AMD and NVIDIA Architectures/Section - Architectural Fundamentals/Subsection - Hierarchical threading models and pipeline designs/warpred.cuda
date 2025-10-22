@@ -1,0 +1,25 @@
+extern "C" __global__ void warp_reduce_sum(float *g_in, float *g_out, int N) {
+  extern __shared__ float s[];              // per-block shared memory
+  int tid = blockIdx.x * blockDim.x + threadIdx.x;
+  int lane = threadIdx.x & 31;              // lane within warp
+  int warpId = threadIdx.x >> 5;           // warp index in block
+
+  // load with coalesced access; bounds-checked
+  float v = (tid < N) ? g_in[tid] : 0.0f;
+
+  // per-warp tree-reduction using shuffle (keeps within warp pipelines)
+  for (int offset = 16; offset > 0; offset >>= 1)
+    v += __shfl_down_sync(0xFFFFFFFF, v, offset);
+
+  // warp leader writes warp result to shared memory (minimize bank contention)
+  if (lane == 0) s[warpId] = v;
+  __syncthreads();                         // synchronize at block level
+
+  // first warp reduces warp results (small serial work)
+  if (warpId == 0) {
+    float sum = (threadIdx.x < (blockDim.x >> 5)) ? s[lane] : 0.0f;
+    for (int offset = 16; offset > 0; offset >>= 1)
+      sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+    if (lane == 0) g_out[blockIdx.x] = sum; // per-block output
+  }
+}
