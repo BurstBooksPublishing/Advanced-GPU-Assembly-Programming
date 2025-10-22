@@ -1,0 +1,40 @@
+#include <cuda_runtime.h>
+#include <nvToolsExt.h>
+#include <stdio.h>
+
+// Example kernel (simple compute; replace with target SASS-sensitive work).
+__global__ void compute_kernel(float *a, int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    float x = a[i];
+    // simple arithmetic to generate SASS-level instructions
+    for (int k = 0; k < 16; ++k) x = x * 1.0001f + 0.0001f;
+    a[i] = x;
+  }
+}
+
+int main() {
+  const int N = 1<<20;
+  float *d_a;
+  cudaMalloc(&d_a, N * sizeof(float));
+  // Start host-visible profiler (nvprof) capture.
+  cudaProfilerStart(); // begin collecting activities for legacy tools
+
+  // Annotate a logical phase for timeline tools (Nsight / nvprof).
+  nvtxRangePushA("phase:compute_kernel"); // push label for this region
+
+  // Kernel launch: use block sizes tuned for register/shared memory trade-offs.
+  dim3 block(256);
+  dim3 grid((N + block.x - 1) / block.x);
+  compute_kernel<<<grid, block>>>(d_a, N);
+  cudaDeviceSynchronize(); // flush kernel before popping range
+
+  nvtxRangePop(); // end annotation
+
+  // Stop profiler collection.
+  cudaProfilerStop();
+
+  cudaFree(d_a);
+  printf("Done\n");
+  return 0;
+}
