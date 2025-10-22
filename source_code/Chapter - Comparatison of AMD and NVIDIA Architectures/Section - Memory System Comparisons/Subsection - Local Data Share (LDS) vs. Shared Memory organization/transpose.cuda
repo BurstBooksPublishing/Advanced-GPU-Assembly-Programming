@@ -1,0 +1,16 @@
+__global__ void tiledTranspose(float *dst, const float *src, int N) {
+  // tileDim assumed divisible by blockDim.x (e.g., 32)
+  __shared__ float tile[BLOCK_DIM][BLOCK_DIM + 1]; // +1 avoids bank conflicts
+  int x = blockIdx.x * BLOCK_DIM + threadIdx.x;
+  int y = blockIdx.y * BLOCK_DIM + threadIdx.y;
+  int index_in = y * N + x;
+  // load tile (coalesced global loads)
+  if (x < N && y < N) tile[threadIdx.y][threadIdx.x] = src[index_in];
+  __syncthreads(); // ensure tile is fully written
+  // transpose coordinates
+  x = blockIdx.y * BLOCK_DIM + threadIdx.x;
+  y = blockIdx.x * BLOCK_DIM + threadIdx.y;
+  int index_out = y * N + x;
+  // write transposed (coalesced global stores)
+  if (x < N && y < N) dst[index_out] = tile[threadIdx.x][threadIdx.y];
+}
