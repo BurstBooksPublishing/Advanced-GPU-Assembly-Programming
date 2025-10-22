@@ -1,0 +1,105 @@
+.version 7.0
+.target sm_70
+.address_size 64
+
+.visible .entry rayAABBIntersect(
+  .param .u64 rays_ptr,       // pointer to ray array (ox,oy,oz,dx,dy,dz)
+  .param .u64 aabbs_ptr,      // pointer to AABB array (minx,miny,minz,maxx,maxy,maxz)
+  .param .u64 hits_ptr,       // pointer to results (u32 hit, f32 tmin)
+  .param .u32 count           // number of rays / AABBs
+)
+{
+  .reg .pred p;
+  .reg .b32 tid, ntid, ctaid, tmp;
+  .reg .b64 rays_base, aabbs_base, hits_base;
+  .reg .b64 rays_addr, aabbs_addr, hits_addr;
+  .reg .b32 idx;
+  .reg .b64 off;
+  .reg .f32 ox, oy, oz, dx, dy, dz, invx, invy, invz;
+  .reg .f32 tx1, tx2, ty1, ty2, tz1, tz2;
+  .reg .f32 tmin_x, tmin_y, tmin_z, tmax_x, tmax_y, tmax_z;
+  .reg .f32 tmin, tmax, zero, one_f;
+  .reg .u32 hit_flag;
+
+  // load parameters
+  ld.param.u64 rays_base, [rays_ptr];
+  ld.param.u64 aabbs_base, [aabbs_ptr];
+  ld.param.u64 hits_base, [hits_ptr];
+  ld.param.u32 ntid, [count]; // reuse ntid for count temporarily
+
+  // compute global thread index: idx = blockIdx.x * blockDim.x + threadIdx.x
+  mov.u32 tid, %tid.x;
+  mov.u32 ctaid, %ctaid.x;
+  mov.u32 tmp, %ntid.x;
+  mul.lo.u32 idx, ctaid, tmp;
+  add.u32 idx, idx, tid;
+
+  // if idx >= count return
+  setp.ge.u32 p, idx, ntid;
+  @p bra DONE;
+
+  // compute byte offsets
+  mul.wide.u32 off, idx, 24;
+  add.u64 rays_addr, rays_base, off;
+  add.u64 aabbs_addr, aabbs_base, off;
+  mul.wide.u32 off, idx, 8;
+  add.u64 hits_addr, hits_base, off;
+
+  // load ray
+  ld.global.f32 ox, [rays_addr];
+  ld.global.f32 oy, [rays_addr+4];
+  ld.global.f32 oz, [rays_addr+8];
+  ld.global.f32 dx, [rays_addr+12];
+  ld.global.f32 dy, [rays_addr+16];
+  ld.global.f32 dz, [rays_addr+20];
+
+  // load AABB
+  ld.global.f32 tmin_x, [aabbs_addr];
+  ld.global.f32 tmin_y, [aabbs_addr+4];
+  ld.global.f32 tmin_z, [aabbs_addr+8];
+  ld.global.f32 tmax_x, [aabbs_addr+12];
+  ld.global.f32 tmax_y, [aabbs_addr+16];
+  ld.global.f32 tmax_z, [aabbs_addr+20];
+
+  // set constants
+  mov.f32 one_f, 1.0f;
+  mov.f32 zero, 0.0f;
+
+  // inverse directions
+  div.rn.f32 invx, one_f, dx;
+  div.rn.f32 invy, one_f, dy;
+  div.rn.f32 invz, one_f, dz;
+
+  // slab t values
+  sub.f32 tx1, tmin_x, ox; mul.f32 tx1, tx1, invx;
+  sub.f32 tx2, tmax_x, ox; mul.f32 tx2, tx2, invx;
+  sub.f32 ty1, tmin_y, oy; mul.f32 ty1, ty1, invy;
+  sub.f32 ty2, tmax_y, oy; mul.f32 ty2, ty2, invy;
+  sub.f32 tz1, tmin_z, oz; mul.f32 tz1, tz1, invz;
+  sub.f32 tz2, tmax_z, oz; mul.f32 tz2, tz2, invz;
+
+  // compute tmin and tmax
+  min.f32 tmin_x, tx1, tx2;
+  min.f32 tmin_y, ty1, ty2;
+  min.f32 tmin_z, tz1, tz2;
+  max.f32 tmin, tmin_x, tmin_y;
+  max.f32 tmin, tmin, tmin_z;
+
+  max.f32 tmax_x, tx1, tx2;
+  max.f32 tmax_y, ty1, ty2;
+  max.f32 tmax_z, tz1, tz2;
+  min.f32 tmax, tmax_x, tmax_y;
+  min.f32 tmax, tmax, tmax_z;
+
+  // hit if tmax >= max(tmin, 0)
+  max.f32 tmin, tmin, zero;
+  setp.ge.f32 p, tmax, tmin;
+  selp.u32 hit_flag, 1, 0, p;
+
+  // write result
+  st.global.u32 [hits_addr], hit_flag;
+  st.global.f32 [hits_addr+4], tmin;
+
+DONE:
+  ret;
+}
