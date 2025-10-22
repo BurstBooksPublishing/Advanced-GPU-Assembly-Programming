@@ -1,0 +1,34 @@
+extern "C" __global__ void tiled_doublebuf(const float *A, float *C,
+                                           int N, int tile) {
+  extern __shared__ float s_buf[];         // total shared mem: 2*tile*tile
+  float *buf0 = s_buf;                     // first tile buffer
+  float *buf1 = s_buf + tile*tile;         // second tile buffer
+  int tx = threadIdx.x, ty = threadIdx.y;
+  int bx = blockIdx.x, by = blockIdx.y;
+  int row = by*tile + ty, col = bx*tile + tx;
+
+  // Load initial tile into buf0 (coalesced loads)
+  if (row < N && col < N) buf0[ty*tile + tx] = A[row*N + col];
+  __syncthreads();
+
+  for (int t=0; t < N; t += tile) {
+    // start loading next tile into buf1 (prefetch) while computing on buf0
+    int col_next = t + tx;
+    int row_next = by*tile + ty;
+    if (col_next < N && row_next < N)
+      buf1[ty*tile + tx] = A[row_next*N + col_next]; // global -> shared
+    __syncthreads(); // ensure buf1 ready for next iteration
+
+    // Compute using data from buf0 (independent from loads into buf1)
+    float acc = 0.0f;
+    // example compute: simple reduction over tile row
+    for (int k = 0; k < tile; ++k) {
+      acc += buf0[ty*tile + k] * 1.0f; // multiply by some weight
+    }
+    if (row < N && t/ tile < N) C[row*N + t/ tile] = acc; // store result
+
+    // swap buffers for next iteration
+    __syncthreads();
+    float *tmp = buf0; buf0 = buf1; buf1 = tmp;
+  }
+}
