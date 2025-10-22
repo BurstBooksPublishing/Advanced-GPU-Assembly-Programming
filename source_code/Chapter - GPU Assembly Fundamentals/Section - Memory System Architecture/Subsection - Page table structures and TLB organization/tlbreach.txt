@@ -1,0 +1,24 @@
+#include <stdio.h>
+#include <stdint.h>
+
+// Compute reach and suggest page size; entries_l1/l2 are per-level entry counts.
+void recommend_page_size(uint64_t entries_l1, uint64_t entries_l2) {
+    uint64_t page_sizes[] = {4ULL * 1024, 64ULL * 1024, 2ULL * 1024 * 1024}; // 4KB, 64KB, 2MB
+    for (int i = 0; i < 3; ++i) {
+        uint64_t p = page_sizes[i];
+        uint64_t reach_l1 = entries_l1 * p; // bytes
+        uint64_t reach_l2 = entries_l2 * p;
+        // Print in MB for readability.
+        printf("Page %6llu KB: L1 reach %.2f MB, L2 reach %.2f MB\n",
+               (unsigned long long)(p / 1024),
+               (double)reach_l1 / (1024.0 * 1024.0),
+               (double)reach_l2 / (1024.0 * 1024.0));
+    }
+    // Recommendation heuristic: prefer largest page where L1 reach >= 4 MB
+    printf("// Use kernel APIs to request huge pages or cudaHostRegister to pin.\n");
+}
+
+int main() {
+    recommend_page_size(64, 4096); // example: 64-entry L1 TLB, 4K-entry L2 TLB
+    return 0;
+}
