@@ -1,0 +1,54 @@
+extern "C" __global__
+void bias_grad_kernel(const float* __restrict__ dOut, // [B, C, H, W] (NHWC or NCHW flattened)
+                      float* __restrict__ d_bias,     // [C]
+                      int B, int C, int H, int W) {
+  // Each block handles one or more channels; blockDim.x = 128 typical.
+  int channel = blockIdx.x * blockDim.y + threadIdx.y; // threadIdx.y selects channel tile
+  if (channel >= C) return;
+
+  // Flattened per-sample spatial size
+  int spatial = H * W;
+  int total = B * spatial;
+  // Each thread accumulates a partial sum over strided indices.
+  float local = 0.0f;
+  int laneId = threadIdx.x & 31;
+  unsigned mask = 0xffffffffu;
+  // stride across samples: each thread processes multiple positions
+  for (int idx = threadIdx.x + threadIdx.y * blockDim.x; idx < total; idx += blockDim.x * blockDim.y) {
+    // assuming layout: [i * C * spatial + channel * spatial + s]
+    int base = idx * C + channel * spatial;         // index math adjusted to layout
+    // accumulate spatial element (avoid uncoalesced loads by reading contiguous blocks)
+    for (int s = 0; s < spatial; ++s) {
+      local += dOut[base + s]; // comment: memory pattern depends on tensor layout
+    }
+  }
+
+  // Warp-level reduction using shuffle down
+  for (int offset = 16; offset > 0; offset >>= 1)
+    local += __shfl_down_sync(mask, local, offset);
+
+  // lane 0 of each warp writes to shared memory
+  __shared__ float warpAgg[32][4]; // supports up to 128 threads per block (4 warps)
+  int warpId = threadIdx.x >> 5;
+  if ((laneId == 0)) {
+    warpAgg[warpId][threadIdx.y] = local;
+  }
+  __syncthreads();
+
+  // first warp reduces the warp aggregates
+  float blockSum = 0.0f;
+  if (warpId == 0) {
+    if (threadIdx.x < (blockDim.x >> 5)) {
+      blockSum = warpAgg[threadIdx.x][threadIdx.y];
+    } else {
+      blockSum = 0.0f;
+    }
+    // reduce across those values
+    for (int offset = 16; offset > 0; offset >>= 1)
+      blockSum += __shfl_down_sync(mask, blockSum, offset);
+    if (laneId == 0) {
+      // single atomic add per block per channel
+      atomicAdd(&d_bias[channel], blockSum);
+    }
+  }
+}
