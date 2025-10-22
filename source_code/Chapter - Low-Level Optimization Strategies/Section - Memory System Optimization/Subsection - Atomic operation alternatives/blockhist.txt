@@ -1,0 +1,33 @@
+__global__ void histogram_kernel(const int* data, int n,
+                                 unsigned int* global_hist, int nbins){
+  extern __shared__ unsigned int shm[]; // per-block histogram
+  int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  int lane = threadIdx.x & 31;          // lane in warp
+  int wid  = threadIdx.x >> 5;         // warp id in block
+
+  // initialize shared histogram in parallel (coalesced loop).
+  for(int b = threadIdx.x; b < nbins; b += blockDim.x) shm[b] = 0u;
+  __syncthreads();
+
+  // Accumulate into per-thread private register then to shared memory
+  unsigned int local_bin = 0xFFFFFFFFu;
+  if(tid < n) local_bin = data[tid];
+  if(local_bin != 0xFFFFFFFFu){
+    // atomicAdd on shared memory (fast, intra-SM).
+    atomicAdd(&shm[local_bin], 1u);
+  }
+  __syncthreads();
+
+  // Each warp performs a reduction across its portion of bins:
+  // warp lanes cooperatively pick a bin and sum across warps,
+  // then lane 0 of each warp does one atomic to global_hist.
+  for(int b = lane; b < nbins; b += 32){ // each warp handles bins stride 32
+    unsigned int val = shm[b];
+    // reduce val across lanes in warp using shuffle down (NVIDIA).
+    for(int offset = 16; offset > 0; offset >>= 1) 
+      val += __shfl_down_sync(0xFFFFFFFFu, val, offset);
+    if(lane == 0){ // one atomic per warp per handled bin
+      atomicAdd(&global_hist[b], val); // global atomic rate reduced
+    }
+  }
+}
