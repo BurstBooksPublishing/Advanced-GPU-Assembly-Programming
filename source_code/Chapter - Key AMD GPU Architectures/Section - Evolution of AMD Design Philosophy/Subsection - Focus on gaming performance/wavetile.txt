@@ -1,0 +1,35 @@
+__kernel void tiled_convolve(__read_only image2d_t src, __write_only image2d_t dst,
+                             __constant float *kernel, int kSize) {
+  // work-item coords
+  const int gx = get_global_id(0);
+  const int gy = get_global_id(1);
+  const int lx = get_local_id(0);
+  const int ly = get_local_id(1);
+  const int lxSize = get_local_size(0);
+  const int lySize = get_local_size(1);
+
+  // tile includes halo for kernel radius; use local memory (LDS).
+  const int radius = kSize/2;
+  __local float tile[/*tile_h*/  (32+16) * /*tile_w*/  (32+16)]; // tune to wave multiples
+
+  // compute local index into flattened tile (simple mapping).
+  int localIndex = ly*lxSize + lx;
+
+  // load tile with cooperative work-items into LDS (bounds-checked).
+  int tx = gx - lx + lx; // simplified for illustration
+  int ty = gy - ly + ly;
+  float pixel = read_imagef(src, (int2)(gx,gy)).x; // read one channel
+  tile[localIndex] = pixel; // cooperative load
+  barrier(CLK_LOCAL_MEM_FENCE);
+
+  // perform convolution using LDS window
+  float out = 0.0f;
+  for (int ky= -radius; ky<=radius; ++ky)
+    for (int kx= -radius; kx<=radius; ++kx) {
+      int ix = lx + kx + radius; int iy = ly + ky + radius;
+      float v = tile[iy*lxSize + ix];         // local load is fast
+      out += v * kernel[(ky+radius)*kSize + (kx+radius)];
+    }
+  write_imagef(dst, (int2)(gx,gy), (float4)(out, out, out, 1.0f));
+}
+% // host: launch with local_size_x,Y multiples of 32 to align waves
