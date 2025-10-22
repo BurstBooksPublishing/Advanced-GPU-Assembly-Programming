@@ -1,0 +1,18 @@
+extern "C" __global__ void mem_patterns(const float* __restrict__ g_in, float* __restrict__ g_out, int N, int stride) {
+    extern __shared__ float sdata[];       // dynamic shared size set at launch
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int lane = threadIdx.x & 31;           // lane within warp (NVIDIA)
+    // Pattern A: contiguous coalesced read
+    if (tid < N) {
+        float vA = g_in[tid];              // typically one coalesced transaction for a full warp
+        // Pattern B: strided read (tunable stride) to show extra transactions
+        float vB = g_in[tid * stride];    // increases distinct cache-line count often
+        // Pattern C: load to shared to enable reuse and reduce DRAM traffic
+        int sidx = threadIdx.x;            // map each thread to unique shared index
+        sdata[sidx] = vA;                 // banked store; choose sidx layout to avoid conflicts
+        __syncthreads();
+        float vC = sdata[(sidx + 1) % blockDim.x]; // read with potential bank conflict pattern
+        // write a simple combination back
+        if (tid < N) g_out[tid] = vA + vB + vC;
+    }
+}
