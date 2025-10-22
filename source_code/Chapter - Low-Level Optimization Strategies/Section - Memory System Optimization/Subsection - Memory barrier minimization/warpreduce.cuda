@@ -1,0 +1,32 @@
+#include 
+
+// warpReduce: reduces values within a warp using shuffle down.
+// Assumes 32-thread warp size on NVIDIA; portable APIs on newer runtimes exist.
+__inline__ __device__
+float warpReduceSum(float val) {
+  for (int offset = 16; offset > 0; offset >>= 1)
+    val += __shfl_down_sync(0xFFFFFFFFu, val, offset); // warp-local exchange
+  return val;
+}
+
+// Kernel: each block computes one partial sum, but only one atomic to global.
+// No __syncthreads() used between warps.
+__global__
+void warp_opt_reduce(const float * __restrict__ input, float * __restrict__ out, int N) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;
+  float v = 0.0f;
+  // Each thread accumulates strided values.
+  for (int i = gid; i < N; i += gridDim.x * blockDim.x)
+    v += input[i];
+
+  // Warp-level reduction
+  float warp_sum = warpReduceSum(v);
+
+  // One lane per warp performs the atomic add to global result.
+  int lane = threadIdx.x & 31;
+  if (lane == 0) {
+    // Atomic add is global and serializes only the small number of warps.
+    atomicAdd(out, warp_sum); // fast on modern NVIDIA GPUs
+  }
+  // No block-level barrier required.
+}
