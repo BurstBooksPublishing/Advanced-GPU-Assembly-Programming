@@ -1,0 +1,26 @@
+__kernel void tiled_transform(__global const float *src, __global float *dst,
+                             int N) {
+  // tile_size chosen to fit LDS and preserve occupancy
+  const int tile_size = 256;                     // elements per tile
+  __local float lds[tile_size];                  // LDS buffer (shared)
+  int gid = get_global_id(0);
+  int lid = get_local_id(0);
+  int group_base = get_group_id(0) * tile_size;
+
+  // Vectorized load: process 4 floats per iteration if possible
+  int vec_stride = get_local_size(0) / 4;        // reduce header overhead
+  // Stage: cooperative vectorized load into LDS
+  for (int i = lid; i < tile_size && (group_base + i) < N; i += get_local_size(0)) {
+    // load 1 element per thread (could be float4 for width match)
+    lds[i] = src[group_base + i];               // global -> LDS (one load)
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);                  // ensure tile ready
+
+  // Compute using LDS (in-register work) and write back
+  if ((group_base + lid) < N) {
+    float x = lds[lid];                          // reuse from LDS
+    // simple transform to illustrate compute added to increase intensity
+    float y = x * 0.5f + x * x * 0.25f;
+    dst[group_base + lid] = y;                   // single global write
+  }
+}
