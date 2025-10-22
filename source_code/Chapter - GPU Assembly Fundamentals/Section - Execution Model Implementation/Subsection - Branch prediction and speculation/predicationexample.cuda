@@ -1,0 +1,22 @@
+extern "C" __global__ void branch_kernel(int *data, int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;                 // uniform boundary check
+  int v = data[i];
+  if (v < 0) {                        // control divergence hotspot
+    v = v + 1;                        // short taken path
+  } else {
+    v = v - 1;                        // short not-taken path
+  }
+  data[i] = v;
+}
+
+// Predicated form: compiler emits setp + @predicate ALU ops.
+extern "C" __global__ void predicated_kernel(int *data, int N) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= N) return;                 // same boundary check
+  int v = data[i];
+  bool pred = (v < 0);                // compute predicate (setp)
+  int v_true  = v + 1;                // body for true
+  int v_false = v - 1;                // body for false
+  data[i] = pred ? v_true : v_false;  // single-store, masked update
+}
