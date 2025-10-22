@@ -1,0 +1,27 @@
+extern "C" __global__ void reg_pressure_kernel(float *out, const float *in, int n) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;            // minimal register use
+    if (tid >= n) return;
+
+    // Many temporaries to force register pressure; the compiler maps these to registers.
+    float a0 = in[tid];
+    float a1 = a0 * 1.001f;
+    float a2 = a1 + 0.5f;
+    float a3 = a2 * 0.75f;
+    float a4 = a3 - 0.333f;
+    float a5 = a4 * 2.0f;
+    float a6 = a5 + a0;
+    float a7 = a6 * 0.125f;
+    float a8 = a7 - a1;
+    float a9 = a8 * 3.14159f;
+    float a10 = a9 + a2;
+    float a11 = a10 * 0.0625f;
+    float a12 = a11 - a3;
+    float a13 = a12 * a4;
+    float a14 = a13 + a5;
+    float a15 = a14 * a6;
+    // More temporaries can be added to exceed register budget and force spills.
+
+    // Final reduction stored back to global memory; if spills occurred,
+    // this store/load sequence will have had extra local memory traffic.
+    out[tid] = a15 + a14 + a13;
+}
