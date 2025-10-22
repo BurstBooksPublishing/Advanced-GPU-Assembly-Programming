@@ -1,0 +1,25 @@
+.visible .entry pred_demo(
+  .param .u64 ptr,         // pointer to data (device memory)
+  .param .u32 n            // length
+)
+{
+  .reg .pred p_cond;       // predicate register
+  .reg .b32  r_idx, r_val; // index and value
+  .reg .b64  r_ptr;
+
+  // load parameters
+  ld.param.u64 r_ptr, [ptr];      // load pointer
+  ld.param.u32 r_idx, [n];        // load n into r_idx (example)
+
+  // compute condition: r_idx < 1024
+  mov.u32 r_val, 1024;            // immediate
+  setp.lt.u32 p_cond, r_idx, r_val; // p_cond = (r_idx < 1024)
+
+  // predicated store: only lanes with p_cond true perform this store
+  @p_cond st.global.u32 [r_ptr], r_idx; // predicated memory write
+
+  // conditional selection without branching: r_val = (p_cond) ? r_idx : 0
+  selp.u32 r_val, r_idx, 0, p_cond;     // ternary select by predicate
+
+  ret;
+}
