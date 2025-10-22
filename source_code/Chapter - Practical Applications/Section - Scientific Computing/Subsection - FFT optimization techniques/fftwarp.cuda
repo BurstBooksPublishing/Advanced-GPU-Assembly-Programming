@@ -1,0 +1,35 @@
+extern "C" __global__
+void fft_warp_stage(cuFloatComplex *data, const cuFloatComplex *twiddles,
+                    int stride, int N) {
+  unsigned int lane = threadIdx.x & 31;              // lane in warp
+  unsigned int warpid = (threadIdx.x >> 5) + blockIdx.x * (blockDim.x/32);
+
+  // each thread holds one complex element in register
+  cuFloatComplex x = data[warpid * (blockDim.x/32) * N + threadIdx.x]; // load
+
+  // compute pair index using stride (radix-2): partner lane = lane ^ (stride)
+  unsigned int partner = lane ^ stride;
+  // exchange partner value across warp into register y
+  unsigned int mask = 0xFFFFFFFF; // full warp active
+  cuFloatComplex y;
+  // shuffle returns the partner's register value (no shared mem)
+  float x_re = __shfl_xor_sync(mask, x.x, stride); // real part exchange
+  float x_im = __shfl_xor_sync(mask, x.y, stride); // imag part exchange
+  y.x = x_re; y.y = x_im;
+
+  // twiddle multiply: compute w * y where w is from twiddles[...]
+  cuFloatComplex w = twiddles[(lane & (stride-1)) * (N/stride)]; // index scheme
+  // complex multiply: (a+ib)*(c+id) = (ac-bd) + i(ad+bc)
+  cuFloatComplex wy;
+  wy.x = w.x * y.x - w.y * y.y;
+  wy.y = w.x * y.y + w.y * y.x;
+
+  // butterfly: a' = x + w*y ; b' = x - w*y (we keep a' in-place)
+  cuFloatComplex apos;
+  apos.x = x.x + wy.x;
+  apos.y = x.y + wy.y;
+
+  // store result (this stage assumes in-place replacement; alternate half-stage stores)
+  data[warpid * (blockDim.x/32) * N + threadIdx.x] = apos;
+  // for full FFT, repeat for log2(N) stages with stride doubling.
+}
