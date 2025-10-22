@@ -1,0 +1,17 @@
+extern "C" __global__ void warp_sum(const float *in, float *out, int N) {
+  int gid = blockIdx.x * blockDim.x + threadIdx.x;            // global thread id
+  if (gid >= N) return;
+  float val = in[gid];                                        // per-thread input
+  unsigned full_mask = 0xffffffffu;                          // full warp active mask
+
+  // warp-local reduction: use warpSize==32 on NVIDIA
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    // shuffle down: each lane reads value from lane+offset within warp
+    float other = __shfl_down_sync(full_mask, val, offset);
+    val += other;                                             // pairwise combine
+  }
+
+  if ((threadIdx.x & 31) == 0) {                               // lane 0 of warp
+    out[blockIdx.x * (blockDim.x/32) + (threadIdx.x>>5)] = val; // write warp sum
+  }
+}
